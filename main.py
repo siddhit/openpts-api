@@ -2,12 +2,54 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from contextlib import asynccontextmanager
 import models
 from database import get_db, engine
 from pydantic import BaseModel
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
+# Auto-seed function
+def seed_if_empty():
+    """Seed the database if it's empty (for first deploy)"""
+    from database import SessionLocal
+    
+    db = SessionLocal()
+    
+    # Check if already seeded
+    motion_count = db.query(models.Motion).count()
+    if motion_count > 0:
+        print(f"✅ Database already has {motion_count} motions - skipping seed")
+        db.close()
+        return
+    
+    # Import seed data
+    from seed_data import MODAPTS_MOTIONS
+    
+    print("🌱 Seeding database with motion codes...")
+    
+    for motion_data in MODAPTS_MOTIONS:
+        motion = models.Motion(
+            code=motion_data["code"],
+            category=motion_data["category"],
+            description=motion_data["description"],
+            body_region=motion_data["body_region"],
+            mod_value=motion_data["mod_value"],
+            time_seconds=motion_data["mod_value"] * 0.129
+        )
+        db.add(motion)
+    
+    db.commit()
+    print(f"✅ Seeded {len(MODAPTS_MOTIONS)} motion codes")
+    db.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: runs when app starts
+    seed_if_empty()
+    yield
+    # Shutdown: runs when app stops (put cleanup code here if needed)
 
 app = FastAPI(
     title="OpenPTS API",
@@ -23,6 +65,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Call seed on startup
+@app.lifespan("startup")
+def startup_event():
+    seed_if_empty()
 
 # Response/Request models
 class MotionInput(BaseModel):
@@ -84,87 +131,3 @@ def get_motion_by_code(code: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Motion code '{code}' not found")
     return motion
 
-@app.post("/api/v1/studies", response_model=StudyResult)
-def create_study(request: CreateStudyRequest, db: Session = Depends(get_db)):
-    """Create a new time study with a sequence of motions"""
-
-    # Create study
-    study = models.Study(name=request.name, description=request.description)
-    db.add(study)
-    db.flush()  # Get the study ID
-
-    total_mods = 0
-    motion_count = 0
-
-    # Add motions
-    for idx, motion_input in enumerate(request.motions):
-        # Look up motion
-        motion = db.query(models.Motion).filter(
-            models.Motion.code == motion_input.code.upper()
-        ).first()
-
-        if not motion:
-            raise HTTPException(status_code=400, detail=f"Invalid motion code: {motion_input.code}")
-
-        # Add to study
-        study_motion = models.StudyMotion(
-            study_id=study.id,
-            motion_code=motion.code,
-            sequence_order=idx,
-            quantity=motion_input.quantity
-        )
-        db.add(study_motion)
-
-        total_mods += motion.mod_value * motion_input.quantity
-        motion_count += motion_input.quantity
-
-    db.commit()
-
-    # Calculate times
-    base_time_seconds = total_mods * 0.129
-    allowances_pct = 12.0  # 12% is a standard allowance (5% personal, 4% fatigue, 3% delay)
-    standard_time_seconds = base_time_seconds * (1 + allowances_pct / 100)
-    units_per_hour = int(3600 / standard_time_seconds) if standard_time_seconds > 0 else 0
-
-    return StudyResult(
-        study_id=study.id,
-        name=study.name,
-        total_motions=motion_count,
-        total_mods=total_mods,
-        base_time_seconds=round(base_time_seconds, 3),
-        allowances_pct=allowances_pct,
-        standard_time_seconds=round(standard_time_seconds, 3),
-        units_per_hour=units_per_hour
-    )
-
-@app.get("/api/v1/studies/{study_id}", response_model=StudyResult)
-def get_study(study_id: int, db: Session = Depends(get_db)):
-    """Get results for a specific study"""
-    study = db.query(models.Study).filter(models.Study.id == study_id).first()
-    if not study:
-        raise HTTPException(status_code=404, detail="Study not found")
-
-    # Recalculate
-    total_mods = 0
-    motion_count = 0
-    for sm in study.study_motions:
-        motion = db.query(models.Motion).filter(models.Motion.code == sm.motion_code).first()
-        if motion:
-            total_mods += motion.mod_value * sm.quantity
-            motion_count += sm.quantity
-
-    base_time_seconds = total_mods * 0.129
-    allowances_pct = 12.0
-    standard_time_seconds = base_time_seconds * (1 + allowances_pct / 100)
-    units_per_hour = int(3600 / standard_time_seconds) if standard_time_seconds > 0 else 0
-
-    return StudyResult(
-        study_id=study.id,
-        name=study.name,
-        total_motions=motion_count,
-        total_mods=total_mods,
-        base_time_seconds=round(base_time_seconds, 3),
-        allowances_pct=allowances_pct,
-        standard_time_seconds=round(standard_time_seconds, 3),
-        units_per_hour=units_per_hour
-    )

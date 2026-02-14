@@ -49,6 +49,33 @@ MODAPTS_MOTIONS = [
 ]
 
 def seed_database():
+    """Manual seed function (for local use)"""
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+
+    # Clear existing data
+    db.query(Motion).delete()
+
+    # Insert motion codes
+    for motion_data in MODAPTS_MOTIONS:
+        motion = Motion(
+            code=motion_data["code"],
+            category=motion_data["category"],
+            description=motion_data["description"],
+            body_region=motion_data["body_region"],
+            mod_value=motion_data["mod_value"],
+            time_seconds=motion_data["mod_value"] * 0.129
+        )
+        db.add(motion)
+
+    db.commit()
+    print(f"✅ Seeded {len(MODAPTS_MOTIONS)} motion codes")
+    db.close()
+
+if __name__ == "__main__":
+    seed_database()
+
+def seed_database():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
 
