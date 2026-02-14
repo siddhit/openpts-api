@@ -54,7 +54,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="OpenPTS API",
     description="Open Predetermined Time Standards - REST API for industrial time study calculations",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
 #Allow frontend to call this API
@@ -65,11 +66,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Call seed on startup
-@app.lifespan("startup")
-def startup_event():
-    seed_if_empty()
 
 # Response/Request models
 class MotionInput(BaseModel):
