@@ -336,6 +336,48 @@ def analyze_sequence(
     )
 
 
+@app.post("/api/v1/sequence/ergonomic")
+def ergonomic_risk_only(
+    request: SequenceAnalyzeRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Return **only** the ergonomic risk assessment for a MODAPTS motion sequence.
+
+    Same input as `/api/v1/sequence/analyze` — useful when you already have
+    standard time from another system and only need the RSI score, risk category,
+    per-element flags, WMSD targets, and engineering recommendations.
+
+    Returns:
+    - **repetitive_strain_index** — composite load score, 0–10
+    - **risk_category** — LOW / MODERATE / HIGH / VERY HIGH
+    - **element_scores** — per-code RSI contribution and risk level
+    - **primary_risk_factors** — WMSD targets and severity for flagged elements
+    - **recommendations** — prioritised engineering interventions with expected RSI reduction
+    """
+    if not request.motions:
+        raise HTTPException(status_code=400, detail="Motion list cannot be empty.")
+
+    motion_data = []
+    for item in request.motions:
+        code = item.code.upper()
+        motion = db.query(models.Motion).filter(models.Motion.code == code).first()
+        if not motion:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Motion code '{code}' not found. GET /api/v1/motions to see all codes.",
+            )
+        motion_data.append({
+            "code":        motion.code,
+            "category":    motion.category,
+            "body_region": motion.body_region,
+            "mod_value":   motion.mod_value,
+            "quantity":    item.quantity,
+        })
+
+    return score_sequence(motion_data)
+
+
 @app.post("/api/v1/classify")
 def classify_motion(request: ClassifyRequest):
     """
