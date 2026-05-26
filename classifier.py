@@ -52,14 +52,19 @@ _MOTION_INFO: Dict[str, Dict[str, Any]] = {
 # person filmed at ~2m distance, full-body visible, standard-height camera.
 # They will need per-deployment calibration once labeled data exists.
 THRESHOLDS = {
-    "bend_shoulder_drop":    0.18,   # shoulder/hip gap closes >18% → bending trunk
+    "bend_shoulder_drop":    0.12,   # shoulder/hip gap closes >12% → bending trunk
+                                     # (was 0.18 — real-world bends in normalized coords
+                                     #  often land 0.12–0.17 depending on camera height)
     "sit_hip_drop":          0.15,   # hips descend >15% of frame → sit/stand motion
     "walk_ankle_oscillation":0.04,   # ankle Y oscillation >4% → walking
-    "wrist_M5":              0.28,   # wrist travels >28% of frame → M5 (very long move)
-    "wrist_M4":              0.18,   # >18% → M4
-    "wrist_M3":              0.10,   # >10% → M3
-    "wrist_M2":              0.05,   # >5%  → M2
+    "wrist_M5":              0.22,   # wrist travels >22% of frame → M5 (very long move)
+                                     # (was 0.28 — floor-to-chest lift in full-body frame ≈ 0.22–0.35)
+    "wrist_M4":              0.14,   # >14% → M4
+    "wrist_M3":              0.08,   # >8%  → M3
+    "wrist_M2":              0.04,   # >4%  → M2
     "wrist_lift_dominant":   0.08,   # wrist Y displacement >8% → lift vs horizontal
+    "wrist_y_range_M5":      0.20,   # wrist vertical range (max-min Y) >20% → likely M5 lift
+                                     # catches short segments where start is already mid-lift
 }
 
 
@@ -140,6 +145,8 @@ def _extract_features(frames: List[Dict], active_side: str) -> Dict[str, Any]:
     # ── Arm / wrist motion ─────────────────────────────────────────────────
     wrist_displacement = _max_displacement(frames, wrist_names)
     wrist_y_displacement = (wrist_ys[0] - min(wrist_ys)) if wrist_ys else 0.0   # lift = positive
+    # Range captures full-body vertical lift even when segment starts mid-motion
+    wrist_y_range = (max(wrist_ys) - min(wrist_ys)) if wrist_ys else 0.0
 
     return {
         "shoulder_y_drop":        round(shoulder_y_drop, 3),
@@ -147,6 +154,7 @@ def _extract_features(frames: List[Dict], active_side: str) -> Dict[str, Any]:
         "ankle_oscillation":      round(ankle_oscillation, 3),
         "wrist_displacement":     round(wrist_displacement, 3),
         "wrist_y_displacement":   round(wrist_y_displacement, 3),
+        "wrist_y_range":          round(wrist_y_range, 3),
         "returns_to_start":       returns_to_start,
     }
 
@@ -233,7 +241,10 @@ def classify_pose_sequence(
         )
 
     # ── Rule 2: SIT (S30) or STAND (ST30) ─────────────────────────────────
-    if f["hip_y_displacement"] >= THRESHOLDS["sit_hip_drop"]:
+    # Guard: exclude walking — hip oscillation during normal gait can exceed
+    # sit_hip_drop. Only classify as sit/stand when ankles are NOT oscillating.
+    if (f["hip_y_displacement"] >= THRESHOLDS["sit_hip_drop"]
+            and f["ankle_oscillation"] < THRESHOLDS["walk_ankle_oscillation"]):
         hip_start = _mean_y([frames[0]], ["left_hip", "right_hip"])
         hip_end   = _mean_y([frames[-1]], ["left_hip", "right_hip"])
         descending = (hip_end[0] > hip_start[0]) if (hip_start and hip_end) else True
@@ -293,24 +304,32 @@ def classify_pose_sequence(
     # ── Rules 4–8: ARM MOTIONS (M1–M5, G0–G3, P0–P5) ─────────────────────
     wd = f["wrist_displacement"]
     wy = f["wrist_y_displacement"]
-    is_lift = wy >= THRESHOLDS["wrist_lift_dominant"]
+    wr = f["wrist_y_range"]    # full vertical travel regardless of start position
+    is_lift = wy >= THRESHOLDS["wrist_lift_dominant"] or wr >= THRESHOLDS["wrist_y_range_M5"]
 
-    if wd >= THRESHOLDS["wrist_M5"]:
+    # Use the larger of point-to-point displacement and total Y range so that
+    # floor-to-chest lifts are not missed when the segment starts mid-motion.
+    effective_wd = max(wd, wr * 0.85)   # 0.85 corrects for diagonal vs. vertical
+
+    if effective_wd >= THRESHOLDS["wrist_M5"]:
         direction = "vertical_lift" if is_lift else "horizontal_sweep"
         return _result(
             code="M5",
-            confidence=min(0.93, 0.76 + wd * 0.5),
+            confidence=min(0.93, 0.76 + effective_wd * 0.5),
             features={
                 **feat,
                 "wrist_displacement_normalized": wd,
+                "wrist_y_range_normalized":      wr,
+                "effective_displacement":        round(effective_wd, 3),
                 "wrist_y_displacement_normalized": wy,
                 "motion_direction":   direction,
                 "motion_type":        "arm_dominant",
                 "motion_duration_ms": duration_ms,
             },
             reasoning=(
-                f"Wrist centroid traveled {wd*100:.0f}% of frame "
-                f"({'vertical/lift' if is_lift else 'horizontal'} dominant). "
+                f"Wrist centroid traveled {wd*100:.0f}% from start; "
+                f"vertical Y range {wr*100:.0f}% (effective {effective_wd*100:.0f}%). "
+                f"{'Vertical lift detected. ' if is_lift else ''}"
                 f"Exceeds M5 threshold ({THRESHOLDS['wrist_M5']*100:.0f}%). "
                 f"Full arm extension engaged (body_region: full_arm)."
             ),
@@ -322,7 +341,7 @@ def classify_pose_sequence(
             next_reason="Long move typically ends with a placement event",
         )
 
-    if wd >= THRESHOLDS["wrist_M4"]:
+    if effective_wd >= THRESHOLDS["wrist_M4"]:
         return _result(
             code="M4",
             confidence=0.85,
@@ -342,7 +361,7 @@ def classify_pose_sequence(
             next_reason="Long arm motion typically precedes placement",
         )
 
-    if wd >= THRESHOLDS["wrist_M3"]:
+    if effective_wd >= THRESHOLDS["wrist_M3"]:
         return _result(
             code="M3",
             confidence=0.83,
@@ -362,7 +381,7 @@ def classify_pose_sequence(
             next_reason="Medium arm move typically precedes placement or regrasp",
         )
 
-    if wd >= THRESHOLDS["wrist_M2"]:
+    if effective_wd >= THRESHOLDS["wrist_M2"]:
         converging = _is_converging(frames)
         if converging:
             return _result(
