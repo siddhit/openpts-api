@@ -1,734 +1,1124 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenPTS — Manufacturing Motion Analysis Demo</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    body { background: #080d1a; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenPTS — Open Predetermined Time Standards</title>
 
-    @keyframes pulse-border {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); }
-      50%       { box-shadow: 0 0 0 6px rgba(59,130,246,0); }
-    }
-    .seg-active { animation: pulse-border 1.8s ease-in-out infinite; }
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 
-    @keyframes slide-up {
-      from { opacity: 0; transform: translateY(16px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .slide-up { animation: slide-up 0.5s ease-out forwards; }
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans:  ['"IBM Plex Sans"',  'system-ui',   'sans-serif'],
+          mono:  ['"IBM Plex Mono"',  'ui-monospace', 'monospace'],
+          serif: ['"IBM Plex Serif"', 'Georgia',      'serif'],
+        },
+        colors: {
+          paper:      '#fbfaf7',
+          panel:      '#ffffff',
+          ink:        '#18181b',
+          dim:        '#52525b',
+          faint:      '#a1a1aa',
+          rule:       '#e7e5e0',
+          accent:     '#c2410c',
+          accenttint: '#fff1e9',
+          cat: {
+            move: '#1d4ed8',
+            get:  '#047857',
+            put:  '#6d28d9',
+            walk: '#334155',
+            bend: '#b45309',
+            sit:  '#a16207',
+            eye:  '#0e7490',
+          },
+        },
+      },
+    },
+  };
+</script>
 
-    @keyframes fade-in {
-      from { opacity: 0; }
-      to   { opacity: 1; }
-    }
-    .fade-in { animation: fade-in 0.4s ease-out forwards; }
-
-    .rsi-bar   { transition: width 0.9s ease-out, background-color 0.4s ease; }
-    .stat-val  { transition: all 0.2s ease-out; }
-
-    video      { background: #0a0f1e; display: block; width: 100%; }
-
-    .drop-zone {
-      border: 2px dashed #1f2937;
-      transition: border-color 0.2s, background 0.2s;
-    }
-    .drop-zone.drag-over, .drop-zone:hover {
-      border-color: #3b82f6;
-      background: rgba(59,130,246,0.05);
-    }
-
-    /* Skeleton canvas overlay */
-    #skeleton-canvas {
-      position: absolute; top: 0; left: 0;
-      pointer-events: none;
-    }
-
-    /* Scrollable feed */
-    #seq-feed { max-height: 380px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #1f2937 transparent; }
-  </style>
+<style>
+  html { scroll-behavior: smooth; }
+  body {
+    background: #fbfaf7;
+    color: #18181b;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+  /* Faint grid backdrop — hero only */
+  .grid-bg {
+    background-image:
+      linear-gradient(to right,  #e7e5e0 1px, transparent 1px),
+      linear-gradient(to bottom, #e7e5e0 1px, transparent 1px);
+    background-size: 48px 48px;
+    background-position: -1px -1px;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 35%, black 0%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 35%, black 0%, transparent 75%);
+  }
+  .hairline { border-color: #e7e5e0; }
+  ::selection { background: #fed7aa; color: #18181b; }
+  .tab-nums { font-variant-numeric: tabular-nums; }
+  /* Scrollbar */
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #d4d4d8 transparent; }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
+  /* Active sequence pulse */
+  @keyframes pulse-ring {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(194,65,12,0.25); }
+    50%       { box-shadow: 0 0 0 6px rgba(194,65,12,0); }
+  }
+  .seg-active { animation: pulse-ring 1.8s ease-in-out infinite; }
+  @keyframes slide-up { from { opacity:0; transform:translateY(12px);} to { opacity:1; transform:none;} }
+  .slide-up { animation: slide-up 0.5s ease-out forwards; }
+  @keyframes fade-in { from { opacity:0;} to { opacity:1;} }
+  .fade-in { animation: fade-in 0.4s ease-out forwards; }
+  .rsi-bar { transition: width 0.9s cubic-bezier(0.22,1,0.36,1), background-color 0.4s ease; }
+  /* Drop zone */
+  .drop-zone {
+    border: 1.5px dashed #d4d4d8;
+    transition: border-color 0.18s ease, background 0.18s ease;
+  }
+  .drop-zone.drag-over, .drop-zone:hover {
+    border-color: #c2410c;
+    background: #fff7f0;
+  }
+  /* Video chip */
+  .video-chip {
+    backdrop-filter: blur(6px);
+    background: rgba(24,24,27,0.78);
+  }
+  /* Skeleton canvas */
+  #skeleton-canvas { position: absolute; inset: 0; pointer-events: none; }
+  /* Code badge */
+  .code-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  /* Pre code blocks */
+  pre.code-block {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: #27272a;
+    background: #ffffff;
+    border: 1px solid #e7e5e0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow: auto;
+  }
+  .code-block .k  { color: #c2410c; }
+  .code-block .s  { color: #047857; }
+  .code-block .n  { color: #1d4ed8; }
+  .code-block .c  { color: #a1a1aa; font-style: italic; }
+  .code-block .p  { color: #71717a; }
+  /* Tag pill */
+  .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid #e7e5e0; background: #ffffff;
+    padding: 3px 8px; border-radius: 999px;
+    font-size: 11px; color: #52525b;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  /* Section */
+  .section { padding-top: 84px; padding-bottom: 84px; }
+  @media (max-width: 768px) { .section { padding-top: 56px; padding-bottom: 56px; } }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #c2410c;
+  }
+  /* Formal section head */
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding-bottom: 14px;
+    margin-bottom: 28px;
+    border-bottom: 1px solid #18181b;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+  }
+  .section-head .num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: #a1a1aa;
+    letter-spacing: 0.04em;
+  }
+  .section-head .title {
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: #18181b;
+  }
+  .section-head .meta {
+    margin-left: auto;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: #a1a1aa;
+    letter-spacing: 0.02em;
+  }
+  @media (max-width: 640px) {
+    .section-head .title { font-size: 22px; }
+    .section-head .meta  { display: none; }
+  }
+  .lede {
+    font-size: 15px;
+    line-height: 1.7;
+    color: #52525b;
+    max-width: 68ch;
+  }
+</style>
 </head>
 
-<body class="text-white min-h-screen">
+<body class="font-sans antialiased">
 
-  <!-- ── Header ────────────────────────────────────────────────────────────── -->
-  <header class="border-b border-gray-800/60 px-5 py-3.5 flex items-center justify-between bg-gray-900/40">
-    <div class="flex items-center gap-3">
-      <div class="w-7 h-7 bg-blue-600 rounded-md flex items-center justify-center font-bold text-xs tracking-tight">O</div>
-      <span class="font-semibold text-white">OpenPTS</span>
-      <span class="hidden sm:inline text-gray-600 text-sm">Open Predetermined Time Standards</span>
-    </div>
-    <div class="flex items-center gap-4 text-xs">
-      <div class="flex items-center gap-1.5">
-        <div id="api-dot" class="w-2 h-2 rounded-full bg-gray-600"></div>
-        <span id="api-status" class="text-gray-500">API ready</span>
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- Header                                                                      -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<header class="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b hairline">
+  <div class="max-w-[1160px] mx-auto px-6 py-3.5 flex items-center gap-6">
+    <a href="#top" class="flex items-center gap-2.5 group">
+      <div class="w-7 h-7 rounded-md bg-ink text-paper font-mono font-bold text-xs flex items-center justify-center">O</div>
+      <div class="leading-tight">
+        <div class="font-semibold text-[15px] text-ink">OpenPTS</div>
+        <div class="text-[10.5px] text-faint font-mono tracking-wide">v0.2.0 · MIT</div>
       </div>
-      <a href="https://openpts-api.vercel.app/docs" target="_blank"
-         class="text-blue-400 hover:text-blue-300 transition-colors">API ↗</a>
-      <a href="https://github.com/siddhit/openpts-api" target="_blank"
-         class="text-gray-500 hover:text-gray-300 transition-colors">GitHub ↗</a>
-    </div>
-  </header>
+    </a>
 
-  <!-- ── Pipeline breadcrumb ───────────────────────────────────────────────── -->
-  <div class="px-5 py-2.5 bg-gray-900/20 border-b border-gray-800/40 overflow-x-auto">
-    <div class="flex items-center gap-2 text-xs text-gray-600 whitespace-nowrap min-w-max">
-      <span class="text-blue-400 font-medium">① Video</span>
-      <span class="text-gray-700">──▶</span>
-      <span>MediaPipe Pose</span>
-      <span class="text-gray-700">──▶</span>
-      <span>MODAPTS Classifier</span>
-      <span class="text-gray-700">──▶</span>
-      <span class="text-blue-400 font-medium">② OpenPTS /sequence/analyze</span>
-      <span class="text-gray-700">──▶</span>
-      <span>③ Standard Time + Ergonomic Risk</span>
+    <nav class="hidden md:flex items-center gap-6 text-[13px] text-dim ml-4">
+      <a href="#demo"     class="hover:text-ink transition-colors">Demo</a>
+      <a href="#codes"    class="hover:text-ink transition-colors">Motion codes</a>
+      <a href="#api"      class="hover:text-ink transition-colors">API</a>
+      <a href="#concepts" class="hover:text-ink transition-colors">Concepts</a>
+      <a href="#about"    class="hover:text-ink transition-colors">About</a>
+    </nav>
+
+    <div class="flex items-center gap-4 ml-auto text-[12.5px]">
+      <div class="hidden sm:flex items-center gap-1.5 text-faint">
+        <div id="api-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+        <span id="api-status" class="font-mono">API ready</span>
+      </div>
+      <a href="https://github.com/siddhit/openpts-api" target="_blank" rel="noopener"
+         class="text-dim hover:text-ink transition-colors flex items-center gap-1">
+        GitHub
+        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 17L17 7M9 7h8v8"/></svg>
+      </a>
+      <a href="#demo" class="hidden sm:inline-flex items-center gap-1 bg-ink text-paper px-3 py-1.5 rounded-md font-medium hover:bg-accent transition-colors">
+        Try demo
+      </a>
     </div>
   </div>
+</header>
 
-  <!-- ── Main layout ───────────────────────────────────────────────────────── -->
-  <main class="p-4 lg:p-6">
-    <div class="max-w-6xl mx-auto space-y-5">
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- Hero                                                                        -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section id="top" class="relative">
+  <div class="absolute inset-0 grid-bg opacity-60 pointer-events-none"></div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-5 gap-5">
+  <div class="relative max-w-[1160px] mx-auto px-6 pt-20 pb-16 md:pt-28 md:pb-24">
+    <div class="grid lg:grid-cols-12 gap-10 items-start">
 
-        <!-- ── Left column: video + stats (3/5) ──────────────────────────── -->
-        <div class="lg:col-span-3 flex flex-col gap-4">
+      <div class="lg:col-span-7">
+        <div class="flex flex-wrap items-center gap-2 mb-7">
+          <span class="tag"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> v0.2.0</span>
+          <span class="tag">MIT License</span>
+          <span class="tag">Python 3.11+</span>
+          <span class="tag">FastAPI</span>
+          <span class="tag">OpenAPI 3.0</span>
+        </div>
 
-          <!-- Video player -->
-          <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <h1 class="text-[32px] md:text-[40px] leading-[1.15] tracking-tight text-ink font-semibold">
+          OpenPTS — Open Predetermined Time Standards.
+        </h1>
 
-            <!-- Drop zone -->
-            <div id="drop-zone"
-                 class="drop-zone aspect-video flex flex-col items-center justify-center gap-4 cursor-pointer p-6">
-              <div class="w-14 h-14 rounded-full bg-gray-800 flex items-center justify-center">
-                <svg class="w-7 h-7 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-                        d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
-                </svg>
-              </div>
-              <div class="text-center">
-                <p class="font-medium text-white text-sm">Drop your video here</p>
-                <p class="text-gray-500 text-xs mt-1">or click to select · MP4, MOV, WebM</p>
-              </div>
-              <p class="text-xs text-gray-700 text-center max-w-xs">
-                Record the task: walk to box → bend → grasp → lift to chest → walk → place on table
-              </p>
-              <input type="file" id="file-input" accept="video/*" class="hidden">
+        <p class="mt-5 text-[16px] leading-[1.7] text-dim max-w-[62ch]">
+          A free, open-source REST API for MODAPTS-grounded industrial time
+          study calculations. Submit a video of an assembly task; receive a
+          motion sequence, base and standard time, units per hour, and an
+          ergonomic risk profile.
+        </p>
+
+        <div class="mt-8 flex flex-wrap items-center gap-3">
+          <a href="#demo"
+             class="inline-flex items-center gap-2 bg-ink text-paper px-4 py-2.5 rounded-md font-medium text-[14px] hover:bg-accent transition-colors">
+            Run the demo
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+          </a>
+          <a href="#codes"
+             class="inline-flex items-center gap-2 border hairline px-4 py-2.5 rounded-md font-medium text-[14px] text-ink bg-panel hover:border-ink/40 transition-colors">
+            Motion code reference
+          </a>
+          <a href="https://github.com/siddhit/openpts-api" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-2 text-dim hover:text-ink px-2 py-2.5 text-[14px] transition-colors">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.92.58.1.79-.25.79-.56v-2.16c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.04 1.78 2.72 1.27 3.38.97.1-.75.4-1.27.74-1.56-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.89-.39.98 0 1.97.13 2.89.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.07.78 2.16v3.2c0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5Z"/></svg>
+            github.com/siddhit/openpts-api
+          </a>
+        </div>
+
+        <p class="mt-10 text-[12px] text-faint font-mono">
+          MODAPTS® is a registered trademark of the International MODAPTS Association.<br>
+          OpenPTS is an independent open-source implementation — not affiliated, not endorsed.
+        </p>
+      </div>
+
+      <!-- Code preview card -->
+      <div class="lg:col-span-5">
+        <div class="bg-panel border hairline rounded-lg overflow-hidden shadow-[0_1px_0_rgba(24,24,27,0.04)]">
+          <div class="flex items-center gap-2 px-4 py-2.5 border-b hairline bg-[#fafaf7]">
+            <div class="flex gap-1.5">
+              <div class="w-2.5 h-2.5 rounded-full bg-[#e4e4e7]"></div>
+              <div class="w-2.5 h-2.5 rounded-full bg-[#e4e4e7]"></div>
+              <div class="w-2.5 h-2.5 rounded-full bg-[#e4e4e7]"></div>
+            </div>
+            <span class="font-mono text-[11px] text-faint ml-2">curl · POST /api/v1/sequence/analyze</span>
+          </div>
+<pre class="code-block !rounded-none !border-0 !border-b hairline">
+<span class="c"># Calculate standard time + ergonomic risk for a sequence</span>
+<span class="k">curl</span> -X POST https://openpts-api.vercel.app<span class="p">\</span>
+       /api/v1/sequence/analyze <span class="p">\</span>
+  -H <span class="s">"Content-Type: application/json"</span> <span class="p">\</span>
+  -d <span class="s">'{
+    "name": "Heavy box, floor to table",
+    "allowances_pct": 15,
+    "motions": [
+      {"code": "W5",  "quantity": 4},
+      {"code": "B17", "quantity": 1},
+      {"code": "G3",  "quantity": 1},
+      {"code": "M5",  "quantity": 1},
+      {"code": "W5",  "quantity": 5},
+      {"code": "P2",  "quantity": 1}
+    ]
+  }'</span></pre>
+<pre class="code-block !rounded-none !border-0">
+<span class="c"># → response</span>
+{
+  <span class="s">"total_mods"</span>: <span class="n">72</span>,
+  <span class="s">"base_time_seconds"</span>: <span class="n">9.288</span>,
+  <span class="s">"standard_time_seconds"</span>: <span class="n">10.681</span>,
+  <span class="s">"units_per_hour"</span>: <span class="n">337</span>,
+  <span class="s">"ergonomic_risk"</span>: {
+    <span class="s">"repetitive_strain_index"</span>: <span class="n">8.9</span>,
+    <span class="s">"risk_category"</span>: <span class="s">"VERY HIGH"</span>
+  }
+}</pre>
+        </div>
+        <p class="mt-3 text-[12px] text-faint font-mono">
+          Swagger / OpenAPI 3.0 docs at <a class="underline decoration-faint hover:text-ink" href="https://openpts-api.vercel.app/docs" target="_blank" rel="noopener">/docs</a>
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- Pipeline strip                                                              -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section class="border-y hairline bg-panel">
+  <div class="max-w-[1160px] mx-auto px-6 py-10">
+    <div class="flex items-center gap-4 mb-6">
+      <span class="eyebrow">Processing pipeline</span>
+      <div class="h-px flex-1 bg-rule"></div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-0 border hairline rounded-lg overflow-hidden">
+      <div class="p-5 border-b md:border-b-0 md:border-r hairline">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-mono text-[11px] text-faint">01</span>
+          <svg class="w-4 h-4 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M15 10l4.5-2.5v9L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
+        </div>
+        <p class="font-semibold text-[14px] text-ink">Video</p>
+        <p class="text-[12px] text-faint mt-0.5">MP4 · MOV · WebM</p>
+      </div>
+      <div class="p-5 border-b md:border-b-0 md:border-r hairline">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-mono text-[11px] text-faint">02</span>
+          <svg class="w-4 h-4 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="6" r="2"/><path d="M12 8v6m0 0l-4 6m4-6l4 6M8 11l8 0"/></svg>
+        </div>
+        <p class="font-semibold text-[14px] text-ink">MediaPipe Pose</p>
+        <p class="text-[12px] text-faint mt-0.5">33-point keypoints</p>
+      </div>
+      <div class="p-5 border-b md:border-b-0 md:border-r hairline">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-mono text-[11px] text-faint">03</span>
+          <svg class="w-4 h-4 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 4v16"/></svg>
+        </div>
+        <p class="font-semibold text-[14px] text-ink">MODAPTS classifier</p>
+        <p class="text-[12px] text-faint mt-0.5">Geometric rules → code</p>
+      </div>
+      <div class="p-5 border-b md:border-b-0 md:border-r hairline bg-accenttint">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-mono text-[11px] text-accent">04</span>
+          <svg class="w-4 h-4 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>
+        </div>
+        <p class="font-semibold text-[14px] text-ink">OpenPTS /sequence/analyze</p>
+        <p class="text-[12px] text-accent mt-0.5 font-mono">this project</p>
+      </div>
+      <div class="p-5">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-mono text-[11px] text-faint">05</span>
+          <svg class="w-4 h-4 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 17l6-6 4 4 8-8M14 7h7v7"/></svg>
+        </div>
+        <p class="font-semibold text-[14px] text-ink">Standard time + risk</p>
+        <p class="text-[12px] text-faint mt-0.5">JSON · per-element</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- § 01 — Live demo                                                            -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section id="demo" class="section">
+  <div class="max-w-[1160px] mx-auto px-6">
+
+    <div class="section-head">
+      <span class="num">§ 01</span>
+      <span class="title">Live demo</span>
+      <span class="meta">interactive · simulated playback available</span>
+    </div>
+    <p class="lede mb-10">
+      Sample task: a worker walks to a heavy box on the floor, bends, grasps it,
+      lifts to chest, walks to a table, and places it down. Six MODAPTS elements,
+      72 MODs, one API call. Drop a video to analyse your own, or run the bundled
+      simulation.
+    </p>
+
+    <div class="grid lg:grid-cols-5 gap-5">
+
+      <!-- ── Left: video + stats ── -->
+      <div class="lg:col-span-3 flex flex-col gap-4">
+
+        <!-- Video panel -->
+        <div class="bg-panel border hairline rounded-lg overflow-hidden">
+
+          <!-- Drop zone -->
+          <div id="drop-zone"
+               class="drop-zone aspect-video flex flex-col items-center justify-center gap-3 cursor-pointer p-6">
+            <div class="w-12 h-12 rounded-full bg-paper border hairline flex items-center justify-center">
+              <svg class="w-6 h-6 text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.4">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+              </svg>
+            </div>
+            <div class="text-center">
+              <p class="font-medium text-ink text-[14px]">Drop a video to analyze</p>
+              <p class="text-faint text-[12px] mt-1">MP4 · MOV · WebM &nbsp;·&nbsp; or run the bundled sample</p>
+            </div>
+            <input type="file" id="file-input" accept="video/*" class="hidden">
+            <div class="flex items-center gap-2 mt-1">
               <button onclick="document.getElementById('file-input').click()"
-                      class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium transition-colors">
-                Select Video
+                      class="px-3.5 py-2 border hairline bg-panel rounded-md text-[12.5px] font-medium text-ink hover:border-ink/40 transition-colors">
+                Select video
+              </button>
+              <button id="sample-btn"
+                      class="px-3.5 py-2 bg-ink text-paper rounded-md text-[12.5px] font-medium hover:bg-accent transition-colors">
+                ▶ Run sample analysis
               </button>
             </div>
+            <p class="text-[11px] text-faint text-center mt-1 font-mono">
+              W5 ×4 &nbsp;·&nbsp; B17 &nbsp;·&nbsp; G3 &nbsp;·&nbsp; M5 &nbsp;·&nbsp; W5 ×5 &nbsp;·&nbsp; P2
+            </p>
+          </div>
 
-            <!-- Video + canvas overlay (hidden until file loaded) -->
-            <div id="video-wrap" class="hidden relative aspect-video">
-              <video id="vid" preload="metadata"></video>
-              <canvas id="skeleton-canvas"></canvas>
-
-              <!-- Active code chip -->
-              <div id="code-chip"
-                   class="hidden absolute top-3 left-3 bg-black/75 backdrop-blur-sm
-                          rounded-lg px-3 py-1.5 flex items-center gap-2">
-                <span id="chip-code" class="font-mono font-bold text-lg leading-none"></span>
-                <span id="chip-label" class="text-xs text-gray-300"></span>
-              </div>
-
-              <!-- Progress bar overlay -->
-              <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-gray-800">
-                <div id="progress-bar" class="h-full bg-blue-500 transition-none" style="width:0%"></div>
-              </div>
+          <!-- Real video + overlay -->
+          <div id="video-wrap" class="hidden relative aspect-video bg-[#f4f3ef]">
+            <video id="vid" preload="metadata" class="w-full h-full object-contain"></video>
+            <canvas id="skeleton-canvas"></canvas>
+            <div id="code-chip" class="hidden absolute top-3 left-3 video-chip rounded-md px-3 py-1.5 flex items-center gap-2 text-paper">
+              <span id="chip-code"  class="font-mono font-bold text-[16px] leading-none"></span>
+              <span id="chip-label" class="text-[11.5px] text-zinc-300"></span>
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 h-1 bg-zinc-300/50">
+              <div id="progress-bar" class="h-full bg-accent" style="width:0%"></div>
             </div>
           </div>
 
-          <!-- Stats row -->
-          <div class="grid grid-cols-3 gap-3">
-            <div class="bg-gray-900 border border-gray-800 rounded-xl p-3.5 text-center">
-              <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">MODs</p>
-              <p id="s-mods" class="stat-val text-3xl font-bold tabular-nums">0</p>
-              <p class="text-xs text-gray-700 mt-0.5">of 72</p>
+          <!-- Sample mode stage -->
+          <div id="sample-stage" class="hidden relative aspect-video overflow-hidden"
+               style="background:linear-gradient(180deg,#f4f3ef 0%,#ebe9e3 100%);">
+            <div class="absolute inset-x-0 bottom-0 h-1/3"
+                 style="background:linear-gradient(180deg,#ebe9e3 0%,#dcd9d1 100%);"></div>
+            <!-- Box -->
+            <div id="sample-box" class="absolute left-[12%] bottom-[22%] w-12 h-12 transition-all duration-500"
+                 style="background:linear-gradient(135deg,#b45309 0%,#92400e 100%); box-shadow:0 4px 0 rgba(0,0,0,0.08);"></div>
+            <!-- Table -->
+            <div class="absolute right-[10%] bottom-[22%] w-32 h-2.5 bg-[#a16207]"></div>
+            <div class="absolute right-[12%] bottom-[8%] w-1.5 h-[14%] bg-[#a16207]"></div>
+            <div class="absolute right-[36%] bottom-[8%] w-1.5 h-[14%] bg-[#a16207]"></div>
+            <!-- Stick figure -->
+            <svg id="sample-figure" class="absolute" viewBox="0 0 60 120"
+                 style="left:5%; bottom:22%; width:50px; height:110px;" overflow="visible">
+              <g id="sf-g" stroke="#18181b" stroke-width="3" stroke-linecap="round" fill="none">
+                <circle id="sf-head"  cx="30" cy="14"  r="9" fill="#fbfaf7"/>
+                <line   id="sf-torso" x1="30" y1="23" x2="30" y2="65"/>
+                <line   id="sf-arml"  x1="30" y1="35" x2="14" y2="55"/>
+                <line   id="sf-armr"  x1="30" y1="35" x2="46" y2="55"/>
+                <line   id="sf-legl"  x1="30" y1="65" x2="18" y2="110"/>
+                <line   id="sf-legr"  x1="30" y1="65" x2="42" y2="110"/>
+              </g>
+            </svg>
+            <!-- Active code chip -->
+            <div id="sample-chip" class="hidden absolute top-3 left-3 video-chip rounded-md px-3 py-1.5 flex items-center gap-2 text-paper">
+              <span id="sample-chip-code"  class="font-mono font-bold text-[16px] leading-none"></span>
+              <span id="sample-chip-label" class="text-[11.5px] text-zinc-300"></span>
             </div>
-            <div class="bg-gray-900 border border-gray-800 rounded-xl p-3.5 text-center">
-              <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Base Time</p>
-              <p id="s-time" class="stat-val text-3xl font-bold tabular-nums">0.00</p>
-              <p class="text-xs text-gray-700 mt-0.5">seconds</p>
+            <div class="absolute top-3 right-3 text-[10.5px] font-mono text-faint bg-panel/80 backdrop-blur px-2 py-1 rounded">
+              SAMPLE · simulated playback
             </div>
-            <div class="bg-gray-900 border border-gray-800 rounded-xl p-3.5 text-center">
-              <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Risk Index</p>
-              <p id="s-rsi" class="stat-val text-3xl font-bold tabular-nums">0.0</p>
-              <p class="text-xs text-gray-700 mt-0.5">/ 10</p>
-            </div>
-          </div>
-
-          <!-- RSI bar -->
-          <div class="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3">
-            <div class="flex justify-between items-center mb-2">
-              <span class="text-xs text-gray-600 uppercase tracking-wider">Motion Load Index</span>
-              <span id="rsi-cat" class="text-xs font-medium text-gray-600">—</span>
-            </div>
-            <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
-              <div id="rsi-bar" class="rsi-bar h-full rounded-full bg-gray-700" style="width:0%"></div>
-            </div>
-            <div class="flex justify-between mt-1.5 text-xs text-gray-700">
-              <span>Low</span><span>Moderate</span><span>High</span><span>Very High</span>
+            <div class="absolute bottom-0 left-0 right-0 h-1 bg-zinc-300/50">
+              <div id="sample-progress" class="h-full bg-accent" style="width:0%"></div>
             </div>
           </div>
 
         </div>
 
-        <!-- ── Right column: sequence feed (2/5) ─────────────────────────── -->
-        <div class="lg:col-span-2">
-          <div class="bg-gray-900 border border-gray-800 rounded-xl h-full flex flex-col">
-            <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
-              <span class="text-sm font-medium text-gray-200">MODAPTS Sequence</span>
-              <span class="text-xs text-gray-600">Heavy box · floor → table</span>
-            </div>
+        <!-- Stats -->
+        <div class="grid grid-cols-3 gap-3">
+          <div class="bg-panel border hairline rounded-lg p-4">
+            <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider">MODs</p>
+            <p id="s-mods" class="text-[32px] font-bold text-ink leading-none tab-nums mt-1.5">0</p>
+            <p class="text-[11px] text-faint mt-1.5 font-mono">of 72</p>
+          </div>
+          <div class="bg-panel border hairline rounded-lg p-4">
+            <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider">Base time</p>
+            <p id="s-time" class="text-[32px] font-bold text-ink leading-none tab-nums mt-1.5">0.00</p>
+            <p class="text-[11px] text-faint mt-1.5 font-mono">seconds</p>
+          </div>
+          <div class="bg-panel border hairline rounded-lg p-4">
+            <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider">Risk index</p>
+            <p id="s-rsi" class="text-[32px] font-bold text-ink leading-none tab-nums mt-1.5">0.0</p>
+            <p class="text-[11px] text-faint mt-1.5 font-mono">/ 10</p>
+          </div>
+        </div>
 
-            <!-- Sequence items -->
-            <div id="seq-feed" class="p-3 space-y-1.5 flex-1"></div>
-
-            <!-- Legend -->
-            <div class="px-4 py-3 border-t border-gray-800 flex flex-wrap gap-x-4 gap-y-1">
-              <span class="text-xs text-gray-700">Category colours:</span>
-              <span class="text-xs text-slate-400">Walk</span>
-              <span class="text-xs text-orange-400">Bend</span>
-              <span class="text-xs text-emerald-400">Get</span>
-              <span class="text-xs text-blue-400">Move</span>
-              <span class="text-xs text-violet-400">Put</span>
-            </div>
+        <!-- Motion load bar -->
+        <div class="bg-panel border hairline rounded-lg px-4 py-3.5">
+          <div class="flex justify-between items-center mb-2.5">
+            <span class="text-[10.5px] text-faint font-mono uppercase tracking-wider">Motion load index</span>
+            <span id="rsi-cat" class="text-[11px] font-mono font-semibold text-faint">—</span>
+          </div>
+          <div class="h-1.5 bg-paper border hairline rounded-full overflow-hidden">
+            <div id="rsi-bar" class="rsi-bar h-full rounded-full" style="width:0%; background:#d4d4d8;"></div>
+          </div>
+          <div class="flex justify-between mt-1.5 text-[10.5px] text-faint font-mono">
+            <span>Low</span><span>Moderate</span><span>High</span><span>Very high</span>
           </div>
         </div>
 
       </div>
 
-      <!-- ── Study result card (hidden until API responds) ─────────────────── -->
-      <div id="study-card" class="hidden slide-up">
-        <div class="bg-gray-900 border border-blue-900/50 rounded-xl overflow-hidden">
-
-          <!-- Card header -->
-          <div class="px-5 py-3.5 bg-blue-950/40 border-b border-blue-900/30 flex items-center gap-2.5">
-            <div class="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0"></div>
-            <span class="font-medium text-blue-300 text-sm">OpenPTS Analysis Result</span>
-            <code class="ml-auto text-xs text-gray-600 bg-gray-800 px-2 py-0.5 rounded">
-              POST /api/v1/sequence/analyze
-            </code>
+      <!-- ── Right: sequence feed ── -->
+      <div class="lg:col-span-2">
+        <div class="bg-panel border hairline rounded-lg h-full flex flex-col">
+          <div class="px-4 py-3 border-b hairline flex items-center justify-between flex-shrink-0">
+            <span class="text-[13px] font-semibold text-ink">MODAPTS sequence</span>
+            <span class="text-[11px] text-faint font-mono">Heavy box · floor → table</span>
           </div>
-
-          <div class="p-5">
-
-            <!-- Spinner -->
-            <div id="card-loading" class="flex items-center justify-center py-10 gap-3">
-              <div class="w-5 h-5 border-2 border-blue-500/70 border-t-transparent rounded-full animate-spin"></div>
-              <span class="text-gray-400 text-sm">Calling OpenPTS API…</span>
-            </div>
-
-            <!-- Results -->
-            <div id="card-results" class="hidden fade-in">
-
-              <!-- Top metrics -->
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-                <div class="text-center">
-                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Standard Time</p>
-                  <p id="r-std"  class="text-2xl font-bold"></p>
-                  <p class="text-xs text-gray-700 mt-0.5">15% allowance</p>
-                </div>
-                <div class="text-center">
-                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Units / Hour</p>
-                  <p id="r-uph"  class="text-2xl font-bold text-white"></p>
-                  <p class="text-xs text-gray-700 mt-0.5">at standard rate</p>
-                </div>
-                <div class="text-center">
-                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Total MODs</p>
-                  <p id="r-mods" class="text-2xl font-bold text-white"></p>
-                  <p class="text-xs text-gray-700 mt-0.5">1 MOD = 0.129 s</p>
-                </div>
-                <div class="text-center">
-                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Risk Category</p>
-                  <p id="r-cat"  class="text-2xl font-bold"></p>
-                  <p id="r-rsi"  class="text-xs text-gray-700 mt-0.5"></p>
-                </div>
-              </div>
-
-              <!-- Breakdown + recommendation -->
-              <div class="grid sm:grid-cols-2 gap-5">
-
-                <!-- By body region -->
-                <div>
-                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-3">MODs by Body Region</p>
-                  <div id="r-regions" class="space-y-2.5"></div>
-                </div>
-
-                <!-- Top recommendation -->
-                <div>
-                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-3">Top Engineering Recommendation</p>
-                  <div id="r-rec" class="bg-gray-800/60 rounded-lg p-4"></div>
-                </div>
-
-              </div>
-
-              <!-- All recommendations (collapsible) -->
-              <div class="mt-4 pt-4 border-t border-gray-800">
-                <button onclick="toggleSection('all-recs')"
-                        class="text-xs text-gray-600 hover:text-gray-300 transition-colors">
-                  All recommendations ↓
-                </button>
-                <div id="all-recs" class="hidden mt-3 space-y-2" ></div>
-              </div>
-
-              <!-- Raw JSON -->
-              <div class="mt-3">
-                <button onclick="toggleSection('raw-json')"
-                        class="text-xs text-gray-600 hover:text-gray-300 transition-colors">
-                  Raw API response ↓
-                </button>
-                <pre id="raw-json"
-                     class="hidden mt-2 text-xs text-gray-400 bg-gray-800/60 rounded-lg p-4
-                            overflow-auto max-h-64 leading-relaxed"></pre>
-              </div>
-
-            </div><!-- /card-results -->
+          <div id="seq-feed" class="p-2.5 space-y-1.5 flex-1 overflow-y-auto scrollbar-thin" style="max-height:480px;"></div>
+          <div class="px-4 py-3 border-t hairline flex flex-wrap gap-x-3 gap-y-1.5 items-center">
+            <span class="text-[10.5px] text-faint font-mono uppercase tracking-wider">Categories</span>
+            <span class="text-[11px] font-mono font-semibold text-cat-walk">Walk</span>
+            <span class="text-[11px] font-mono font-semibold text-cat-bend">Bend</span>
+            <span class="text-[11px] font-mono font-semibold text-cat-get">Get</span>
+            <span class="text-[11px] font-mono font-semibold text-cat-move">Move</span>
+            <span class="text-[11px] font-mono font-semibold text-cat-put">Put</span>
           </div>
         </div>
-      </div><!-- /study-card -->
+      </div>
 
-    </div><!-- /max-w -->
-  </main>
+    </div>
 
-  <!-- ── Script ─────────────────────────────────────────────────────────────── -->
-  <script>
-  'use strict';
-
-  // ── Config ──────────────────────────────────────────────────────────────────
-  const API = 'https://openpts-api.vercel.app';
-
-  // Category → Tailwind colour tokens (must exist in Tailwind CDN scan)
-  const CAT = {
-    walk:       { border: 'border-slate-600',   text: 'text-slate-300',   bg: 'bg-slate-800/40'   },
-    bend:       { border: 'border-orange-700',  text: 'text-orange-300',  bg: 'bg-orange-950/40'  },
-    get:        { border: 'border-emerald-700', text: 'text-emerald-300', bg: 'bg-emerald-950/40' },
-    move:       { border: 'border-blue-700',    text: 'text-blue-300',    bg: 'bg-blue-950/40'    },
-    put:        { border: 'border-violet-700',  text: 'text-violet-300',  bg: 'bg-violet-950/40'  },
-    sit:        { border: 'border-yellow-700',  text: 'text-yellow-300',  bg: 'bg-yellow-950/40'  },
-    stand:      { border: 'border-yellow-700',  text: 'text-yellow-300',  bg: 'bg-yellow-950/40'  },
-    eye_action: { border: 'border-cyan-700',    text: 'text-cyan-300',    bg: 'bg-cyan-950/40'    },
-  };
-
-  // Body-region strain weights (mirrors ergonomics.py)
-  const W = { body: 3.5, full_arm: 2.5, arm: 2.0, hand: 1.5, leg: 1.2, fingers: 1.0, eyes: 0.5 };
-  const RSI_MAX = 150;
-
-  // ── Sequence definition ──────────────────────────────────────────────────────
-  // start_pct / end_pct are proportions of MODAPTS base time (72 MODs total).
-  // These are replaced with video-accurate values once annotations.json is loaded.
-  const DEFAULT_SEQUENCE = [
-    { code:'W5',  qty:4, label:'Walk to box',       cat:'walk', region:'leg',      mv:5,  start_pct:0.000, end_pct:0.278 },
-    { code:'B17', qty:1, label:'Bend to floor',     cat:'bend', region:'body',     mv:17, start_pct:0.278, end_pct:0.514 },
-    { code:'G3',  qty:1, label:'Complex grasp',     cat:'get',  region:'hand',     mv:3,  start_pct:0.514, end_pct:0.556 },
-    { code:'M5',  qty:1, label:'Lift to chest',     cat:'move', region:'full_arm', mv:5,  start_pct:0.556, end_pct:0.625 },
-    { code:'W5',  qty:5, label:'Walk to table',     cat:'walk', region:'leg',      mv:5,  start_pct:0.625, end_pct:0.972 },
-    { code:'P2',  qty:1, label:'Place on table',    cat:'put',  region:'hand',     mv:2,  start_pct:0.972, end_pct:1.000 },
-  ];
-
-  let SEQ = DEFAULT_SEQUENCE.map(s => ({ ...s }));
-
-  // ── State ────────────────────────────────────────────────────────────────────
-  let activeIdx  = -1;
-  let poseFrames = [];   // loaded from annotations.json if available
-
-  // ── DOM refs ─────────────────────────────────────────────────────────────────
-  const vid       = document.getElementById('vid');
-  const dropZone  = document.getElementById('drop-zone');
-  const vidWrap   = document.getElementById('video-wrap');
-  const canvas    = document.getElementById('skeleton-canvas');
-  const ctx       = canvas.getContext('2d');
-  const fileInput = document.getElementById('file-input');
-  const sMods     = document.getElementById('s-mods');
-  const sTime     = document.getElementById('s-time');
-  const sRsi      = document.getElementById('s-rsi');
-  const rsiBar    = document.getElementById('rsi-bar');
-  const rsiCat    = document.getElementById('rsi-cat');
-  const progBar   = document.getElementById('progress-bar');
-
-  // ── Sequence feed ─────────────────────────────────────────────────────────────
-  function buildFeed() {
-    const feed = document.getElementById('seq-feed');
-    feed.innerHTML = SEQ.map((s, i) => {
-      const c = CAT[s.cat] || CAT.walk;
-      const mods = s.mv * s.qty;
-      const t = (mods * 0.129).toFixed(2);
-      const codeStr = s.qty > 1 ? `${s.code} ×${s.qty}` : s.code;
-      return `
-        <div id="seg${i}"
-             class="flex items-center gap-3 px-3 py-2.5 rounded-lg border
-                    transition-all duration-300 opacity-35
-                    border-gray-800 bg-transparent"
-             data-i="${i}">
-          <div id="seg${i}-icon" class="w-4 h-4 flex items-center justify-center flex-shrink-0">
-            <div class="w-1.5 h-1.5 rounded-full bg-gray-700"></div>
+    <!-- Study result card -->
+    <div id="study-card" class="hidden slide-up mt-5">
+      <div class="bg-panel border hairline rounded-lg overflow-hidden">
+        <div class="px-5 py-3 border-b hairline flex items-center gap-2.5 bg-accenttint">
+          <div class="w-1.5 h-1.5 rounded-full bg-accent"></div>
+          <span class="font-semibold text-[13px] text-ink">OpenPTS analysis result</span>
+          <code class="ml-auto text-[11px] text-dim bg-panel border hairline px-2 py-0.5 rounded font-mono">
+            POST /api/v1/sequence/analyze
+          </code>
+        </div>
+        <div class="p-5">
+          <div id="card-loading" class="flex items-center justify-center py-10 gap-3">
+            <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
+            <span class="text-dim text-[13px]">Calling OpenPTS API…</span>
           </div>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="font-mono font-bold text-sm ${c.text}">${codeStr}</span>
-              <span class="text-xs text-gray-500 truncate">${s.label}</span>
+          <div id="card-results" class="hidden fade-in">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-5 mb-7">
+              <div>
+                <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-1.5">Standard time</p>
+                <p id="r-std"  class="text-[28px] font-bold text-ink tab-nums leading-none"></p>
+                <p class="text-[11px] text-faint mt-1.5 font-mono">15% allowance</p>
+              </div>
+              <div>
+                <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-1.5">Units / hour</p>
+                <p id="r-uph"  class="text-[28px] font-bold text-ink tab-nums leading-none"></p>
+                <p class="text-[11px] text-faint mt-1.5 font-mono">at standard rate</p>
+              </div>
+              <div>
+                <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-1.5">Total MODs</p>
+                <p id="r-mods" class="text-[28px] font-bold text-ink tab-nums leading-none"></p>
+                <p class="text-[11px] text-faint mt-1.5 font-mono">1 MOD = 0.129 s</p>
+              </div>
+              <div>
+                <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-1.5">Risk category</p>
+                <p id="r-cat" class="text-[24px] font-bold leading-none"></p>
+                <p id="r-rsi" class="text-[11px] text-faint mt-1.5 font-mono"></p>
+              </div>
             </div>
-            <div class="text-xs text-gray-700 mt-0.5 capitalize">
-              ${s.region.replace('_',' ')} · ${mods} MODs · ${t}s
+
+            <div class="grid sm:grid-cols-2 gap-6">
+              <div>
+                <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-3">MODs by body region</p>
+                <div id="r-regions" class="space-y-3"></div>
+              </div>
+              <div>
+                <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-3">Top engineering recommendation</p>
+                <div id="r-rec" class="bg-paper border hairline rounded-md p-4"></div>
+              </div>
+            </div>
+
+            <div class="mt-5 pt-5 border-t hairline">
+              <button onclick="toggleSection('all-recs')" class="text-[12px] text-dim hover:text-ink font-mono transition-colors">
+                All recommendations <span class="text-faint">↓</span>
+              </button>
+              <div id="all-recs" class="hidden mt-3 space-y-2"></div>
+            </div>
+            <div class="mt-3">
+              <button onclick="toggleSection('raw-json')" class="text-[12px] text-dim hover:text-ink font-mono transition-colors">
+                Raw API response <span class="text-faint">↓</span>
+              </button>
+              <pre id="raw-json" class="hidden mt-2 text-[11.5px] text-dim bg-paper border hairline rounded-md p-4 overflow-auto max-h-64 leading-relaxed font-mono"></pre>
             </div>
           </div>
-          <div class="text-xs font-mono text-gray-700 flex-shrink-0">${mods}</div>
-        </div>`;
-    }).join('');
-  }
+        </div>
+      </div>
+    </div>
 
-  function activateSeg(i) {
-    if (activeIdx >= 0) deactivateSeg(activeIdx);
-    activeIdx = i;
-    if (i < 0) return;
+  </div>
+</section>
 
-    const el = document.getElementById(`seg${i}`);
-    const s  = SEQ[i];
-    const c  = CAT[s.cat] || CAT.walk;
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- § 02 — Motion code library                                                  -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section id="codes" class="section border-t hairline bg-panel">
+  <div class="max-w-[1160px] mx-auto px-6">
 
-    el.classList.remove('opacity-35', 'border-gray-800', 'bg-transparent');
-    el.classList.add('opacity-100', `border-blue-600`, 'bg-blue-950/30', 'seg-active');
+    <div class="section-head">
+      <span class="num">§ 02</span>
+      <span class="title">Motion code library</span>
+      <span class="meta">17 codes · 7 families · v0.2.0</span>
+    </div>
 
-    // Code chip on video
-    const chip = document.getElementById('code-chip');
-    document.getElementById('chip-code').textContent = s.code;
-    document.getElementById('chip-label').textContent = s.label;
-    chip.classList.remove('hidden');
+    <div class="grid md:grid-cols-3 gap-10 mb-12">
+      <div class="md:col-span-2">
+        <p class="lede">
+          MODAPTS assigns time to basic human movements. Each code is a letter (motion
+          family) plus a number (time, in MODs). <span class="font-mono text-ink bg-accenttint px-1.5 py-0.5 rounded text-[14px]">1 MOD = 0.129&nbsp;s</span> &mdash; 7.75 MODs per second.
+          Codes are body-focused: they track <em>which</em> body region moves, not just the
+          object's distance.
+        </p>
+      </div>
+      <div class="md:col-span-1">
+        <div class="bg-paper border hairline rounded-lg p-5">
+          <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-3">Quick reference</p>
+          <ul class="space-y-1.5 text-[13px]">
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-move">M</span><span class="text-dim">Move</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-get">G</span><span class="text-dim">Get / grasp</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-put">P</span><span class="text-dim">Put / place</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-walk">W / F</span><span class="text-dim">Walk / foot</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-bend">B</span><span class="text-dim">Bend &amp; arise</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-sit">S / ST</span><span class="text-dim">Sit / stand</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-eye">E</span><span class="text-dim">Eye action</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-get">R</span><span class="text-dim">Regrasp</span></li>
+            <li class="flex justify-between"><span class="font-mono font-semibold text-cat-put">A</span><span class="text-dim">Apply pressure</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
 
-    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }
+    <div id="codes-grid" class="space-y-10"></div>
 
-  function deactivateSeg(i) {
-    const el = document.getElementById(`seg${i}`);
-    if (!el) return;
-    el.classList.remove('opacity-100', 'border-blue-600', 'bg-blue-950/30', 'seg-active');
-    el.classList.add('opacity-60', 'border-gray-800', 'bg-transparent');
-  }
+    <p class="text-[12px] text-faint font-mono mt-12">
+      Source: MODAPTS literature (Heyde &amp; Fourie; IISE SWS division; Eisbrenner Productivity Group).
+      Implementation in <code class="text-dim">seed_data.py</code> — open a PR to expand the library.
+    </p>
+  </div>
+</section>
 
-  function completeSeg(i) {
-    const el   = document.getElementById(`seg${i}`);
-    const icon = document.getElementById(`seg${i}-icon`);
-    if (!el) return;
-    el.classList.remove('seg-active', 'border-blue-600', 'bg-blue-950/30', 'opacity-100');
-    el.classList.add('border-gray-800', 'bg-transparent', 'opacity-50');
-    if (icon) icon.innerHTML = `
-      <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
-      </svg>`;
-  }
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- § 03 — REST API                                                             -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section id="api" class="section">
+  <div class="max-w-[1160px] mx-auto px-6">
 
-  // ── Running stats ─────────────────────────────────────────────────────────────
-  function updateStats(elapsedMods) {
-    const time = (elapsedMods * 0.129).toFixed(2);
+    <div class="section-head">
+      <span class="num">§ 03</span>
+      <span class="title">REST API</span>
+      <span class="meta">FastAPI · OpenAPI 3.0 · CORS open</span>
+    </div>
+    <p class="lede mb-10">
+      Four endpoints. Auto-generated Swagger UI at <a class="text-ink font-medium underline decoration-faint hover:decoration-accent" href="https://openpts-api.vercel.app/docs" target="_blank" rel="noopener">/docs</a>.
+    </p>
 
-    // Incremental RSI: sum contributions from completed + partial current segment
-    let raw = 0, consumed = 0;
-    for (const s of SEQ) {
-      const segMods = s.mv * s.qty;
-      const contrib = Math.min(segMods, Math.max(0, elapsedMods - consumed));
-      raw += contrib * (W[s.region] || 1.0);
-      consumed += segMods;
-      if (consumed >= elapsedMods) break;
-    }
-    const rsi = Math.min(10, (raw / RSI_MAX) * 10);
-
-    sMods.textContent = Math.round(elapsedMods);
-    sTime.textContent = time;
-    sRsi.textContent  = rsi.toFixed(1);
-
-    const pct = rsi / 10 * 100;
-    rsiBar.style.width = pct + '%';
-
-    let col, catLabel;
-    if      (rsi >= 7.5) { col = 'bg-red-500';     catLabel = 'VERY HIGH'; }
-    else if (rsi >= 5.0) { col = 'bg-orange-500';   catLabel = 'HIGH'; }
-    else if (rsi >= 2.5) { col = 'bg-yellow-400';   catLabel = 'MODERATE'; }
-    else                 { col = 'bg-emerald-500';   catLabel = 'LOW'; }
-
-    rsiBar.className = `rsi-bar h-full rounded-full ${col}`;
-    rsiCat.textContent  = catLabel;
-    rsiCat.className    = `text-xs font-medium ${
-      rsi >= 7.5 ? 'text-red-400' : rsi >= 5.0 ? 'text-orange-400' :
-      rsi >= 2.5 ? 'text-yellow-400' : 'text-emerald-400'
-    }`;
-  }
-
-  // ── Skeleton drawing ──────────────────────────────────────────────────────────
-  const CONNECTIONS = [
-    ['left_shoulder','right_shoulder'],
-    ['left_shoulder','left_elbow'],['left_elbow','left_wrist'],
-    ['right_shoulder','right_elbow'],['right_elbow','right_wrist'],
-    ['left_shoulder','left_hip'],['right_shoulder','right_hip'],
-    ['left_hip','right_hip'],
-    ['left_hip','left_knee'],['left_knee','left_ankle'],
-    ['right_hip','right_knee'],['right_knee','right_ankle'],
-  ];
-
-  function drawSkeleton(landmarks) {
-    const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
-    if (!landmarks) return;
-
-    ctx.strokeStyle = 'rgba(59,130,246,0.7)';
-    ctx.lineWidth   = 2;
-    for (const [a, b] of CONNECTIONS) {
-      const pa = landmarks[a], pb = landmarks[b];
-      if (pa && pb && pa.visibility > 0.4 && pb.visibility > 0.4) {
-        ctx.beginPath();
-        ctx.moveTo(pa.x * W, pa.y * H);
-        ctx.lineTo(pb.x * W, pb.y * H);
-        ctx.stroke();
-      }
-    }
-    ctx.fillStyle = 'rgba(96,165,250,0.9)';
-    for (const lm of Object.values(landmarks)) {
-      if (lm.visibility > 0.4) {
-        ctx.beginPath();
-        ctx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
-
-  function getSkeletonAtTime(ms) {
-    if (!poseFrames.length) return null;
-    let closest = poseFrames[0];
-    for (const f of poseFrames) {
-      if (Math.abs(f.timestamp_ms - ms) < Math.abs(closest.timestamp_ms - ms))
-        closest = f;
-    }
-    return closest.landmarks;
-  }
-
-  // ── Video sync ────────────────────────────────────────────────────────────────
-  vid.addEventListener('timeupdate', () => {
-    if (!vid.duration) return;
-    const progress = vid.currentTime / vid.duration;
-
-    // Progress bar
-    progBar.style.width = (progress * 100) + '%';
-
-    // Active segment
-    const newIdx = SEQ.findIndex(s => progress >= s.start_pct && progress < s.end_pct);
-    if (newIdx !== activeIdx) {
-      if (activeIdx >= 0 && newIdx > activeIdx) completeSeg(activeIdx);
-      activateSeg(newIdx);
-    }
-
-    // Running MODs (continuous)
-    let elapsed = 0;
-    for (let i = 0; i < SEQ.length; i++) {
-      const s = SEQ[i], sm = s.mv * s.qty;
-      if (i < newIdx) {
-        elapsed += sm;
-      } else if (i === newIdx) {
-        const segProg = (progress - s.start_pct) / Math.max(0.001, s.end_pct - s.start_pct);
-        elapsed += sm * Math.min(1, Math.max(0, segProg));
-        break;
-      }
-    }
-    updateStats(elapsed);
-
-    // Skeleton
-    if (poseFrames.length) {
-      const lm = getSkeletonAtTime(vid.currentTime * 1000);
-      drawSkeleton(lm);
-    }
-  });
-
-  vid.addEventListener('ended', async () => {
-    SEQ.forEach((_, i) => completeSeg(i));
-    activateSeg(-1);
-    document.getElementById('code-chip').classList.add('hidden');
-    updateStats(SEQ.reduce((s, seg) => s + seg.mv * seg.qty, 0));
-    progBar.style.width = '100%';
-
-    document.getElementById('study-card').classList.remove('hidden');
-    await callAPI();
-  });
-
-  vid.addEventListener('loadedmetadata', () => {
-    canvas.width  = vid.videoWidth  || vid.offsetWidth;
-    canvas.height = vid.videoHeight || vid.offsetHeight;
-  });
-
-  // ── API call ──────────────────────────────────────────────────────────────────
-  async function callAPI() {
-    setApiStatus('calling');
-    try {
-      const res = await fetch(`${API}/api/v1/sequence/analyze`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name:           'Heavy Box Floor to Table',
-          description:    'Worker picks up heavy box from floor, walks to table, places it down',
-          allowances_pct: 15,
-          motions:        SEQ.map(s => ({ code: s.code, quantity: s.qty })),
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setApiStatus('ok');
-      renderCard(data);
-    } catch (err) {
-      setApiStatus('error');
-      document.getElementById('card-loading').innerHTML =
-        `<p class="text-red-400 text-sm">API error: ${err.message}</p>`;
-      console.error(err);
-    }
-  }
-
-  function setApiStatus(state) {
-    const dot  = document.getElementById('api-dot');
-    const text = document.getElementById('api-status');
-    const map  = {
-      calling: ['bg-yellow-400 animate-pulse', 'Calling API…'],
-      ok:      ['bg-emerald-400', 'Response received'],
-      error:   ['bg-red-400', 'API error'],
-    };
-    const [cls, label] = map[state] || ['bg-gray-600', 'Ready'];
-    dot.className  = `w-2 h-2 rounded-full ${cls}`;
-    text.textContent = label;
-  }
-
-  // ── Study card render ─────────────────────────────────────────────────────────
-  function renderCard(d) {
-    document.getElementById('card-loading').classList.add('hidden');
-    const res = document.getElementById('card-results');
-    res.classList.remove('hidden');
-
-    document.getElementById('r-std').textContent  = d.standard_time_seconds.toFixed(2) + 's';
-    document.getElementById('r-uph').textContent  = d.units_per_hour.toLocaleString();
-    document.getElementById('r-mods').textContent = d.total_mods;
-
-    const cat = d.ergonomic_risk.risk_category;
-    const rsi = d.ergonomic_risk.repetitive_strain_index;
-    const catEl = document.getElementById('r-cat');
-    catEl.textContent = cat;
-    catEl.className   = `text-2xl font-bold ${
-      cat === 'VERY HIGH' ? 'text-red-400'    :
-      cat === 'HIGH'      ? 'text-orange-400' :
-      cat === 'MODERATE'  ? 'text-yellow-400' : 'text-emerald-400'
-    }`;
-    document.getElementById('r-rsi').textContent = `RSI ${rsi}/10`;
-
-    // Region breakdown bars
-    document.getElementById('r-regions').innerHTML =
-      Object.entries(d.breakdown_by_body_region).map(([region, info]) => `
-        <div>
-          <div class="flex justify-between text-xs mb-1">
-            <span class="text-gray-400 capitalize">${region.replace('_',' ')}</span>
-            <span class="text-gray-600">${info.total_mods} MODs · ${info.pct_of_task}%</span>
+    <div class="space-y-5">
+      <!-- GET /motions -->
+      <div class="bg-panel border hairline rounded-lg overflow-hidden">
+        <div class="grid lg:grid-cols-2 gap-0 divide-x hairline">
+          <div class="p-5">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-[10.5px] font-mono font-bold text-cat-get bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">GET</span>
+              <code class="font-mono text-[13px] text-ink">/api/v1/motions</code>
+              <span class="ml-auto text-[11px] text-faint font-mono">filterable</span>
+            </div>
+            <p class="text-[14px] text-dim leading-[1.65]">
+              Return the full motion library. Filter by <code class="text-ink">body_region</code> or
+              <code class="text-ink">category</code> to narrow candidates before classifying.
+            </p>
           </div>
-          <div class="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-            <div class="h-full bg-blue-500 rounded-full transition-all duration-700"
-                 style="width:${info.pct_of_task}%"></div>
-          </div>
-        </div>`).join('');
+<pre class="code-block !rounded-none !border-0 !border-l hairline">
+<span class="k">curl</span> https://openpts-api.vercel.app/api/v1/motions<span class="p">\</span>
+       <span class="p">?</span>body_region=arm<span class="p">&amp;</span>category=move
 
-    // Top recommendation
-    const recs = d.ergonomic_risk.recommendations;
-    const rec1 = recs[0];
-    document.getElementById('r-rec').innerHTML = rec1 ? `
-      <div class="flex gap-3">
-        <span class="text-orange-400 text-base mt-0.5 flex-shrink-0">⚠</span>
-        <div>
-          <p class="text-sm font-medium text-white leading-snug">${rec1.action}</p>
-          <p class="text-xs text-gray-400 mt-1.5 leading-relaxed">${rec1.detail}</p>
-          <p class="text-xs text-emerald-400 mt-2">
-            Expected RSI reduction: −${rec1.expected_rsi_reduction}
+<span class="c">// → [</span>
+<span class="c">//     {"code":"M3","mod_value":3,"time_seconds":0.387,</span>
+<span class="c">//      "body_region":"arm","category":"move", ... },</span>
+<span class="c">//     ...</span>
+<span class="c">//   ]</span></pre>
+        </div>
+      </div>
+
+      <!-- GET /motions/{code} -->
+      <div class="bg-panel border hairline rounded-lg overflow-hidden">
+        <div class="grid lg:grid-cols-2 gap-0 divide-x hairline">
+          <div class="p-5">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-[10.5px] font-mono font-bold text-cat-get bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">GET</span>
+              <code class="font-mono text-[13px] text-ink">/api/v1/motions/{code}</code>
+            </div>
+            <p class="text-[14px] text-dim leading-[1.65]">
+              One motion by its MODAPTS code. Case-insensitive.
+            </p>
+          </div>
+<pre class="code-block !rounded-none !border-0 !border-l hairline">
+<span class="k">curl</span> https://openpts-api.vercel.app/api/v1/motions/B17
+
+<span class="c">// → {</span>
+<span class="c">//     "code": "B17",</span>
+<span class="c">//     "category": "bend",</span>
+<span class="c">//     "body_region": "body",</span>
+<span class="c">//     "mod_value": 17,</span>
+<span class="c">//     "time_seconds": 2.193</span>
+<span class="c">//   }</span></pre>
+        </div>
+      </div>
+
+      <!-- POST /sequence/analyze (primary, highlighted) -->
+      <div class="bg-panel border-2 border-accent rounded-lg overflow-hidden">
+        <div class="grid lg:grid-cols-2 gap-0 divide-x hairline">
+          <div class="p-5 bg-accenttint">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-[10.5px] font-mono font-bold text-accent bg-panel border border-accent/30 px-2 py-0.5 rounded">POST</span>
+              <code class="font-mono text-[13px] text-ink">/api/v1/sequence/analyze</code>
+              <span class="ml-auto text-[10.5px] font-mono text-accent">primary</span>
+            </div>
+            <p class="text-[14px] text-dim leading-[1.65]">
+              The main study endpoint. Returns <span class="font-medium text-ink">standard time</span> (with allowances),
+              <span class="font-medium text-ink">units/hour</span>, per-element breakdown, body-region totals, category totals,
+              and a full <span class="font-medium text-ink">ergonomic risk profile</span> (RSI 0–10, per-element flags,
+              WMSD targets, prioritised engineering recommendations).
+            </p>
+          </div>
+<pre class="code-block !rounded-none !border-0 !border-l hairline">
+<span class="k">POST</span> /api/v1/sequence/analyze
+<span class="p">{</span>
+  <span class="s">"name"</span>: <span class="s">"Pick and place"</span>,
+  <span class="s">"allowances_pct"</span>: <span class="n">15</span>,
+  <span class="s">"motions"</span>: <span class="p">[</span>
+    <span class="p">{</span><span class="s">"code"</span>: <span class="s">"M3"</span>, <span class="s">"quantity"</span>: <span class="n">1</span><span class="p">}</span>,
+    <span class="p">{</span><span class="s">"code"</span>: <span class="s">"G1"</span>, <span class="s">"quantity"</span>: <span class="n">1</span><span class="p">}</span>,
+    <span class="p">{</span><span class="s">"code"</span>: <span class="s">"P2"</span>, <span class="s">"quantity"</span>: <span class="n">1</span><span class="p">}</span>
+  <span class="p">]</span>
+<span class="p">}</span></pre>
+        </div>
+      </div>
+
+      <!-- POST /classify -->
+      <div class="bg-panel border hairline rounded-lg overflow-hidden">
+        <div class="grid lg:grid-cols-2 gap-0 divide-x hairline">
+          <div class="p-5">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-[10.5px] font-mono font-bold text-accent bg-orange-50 border border-orange-200 px-2 py-0.5 rounded">POST</span>
+              <code class="font-mono text-[13px] text-ink">/api/v1/classify</code>
+              <span class="ml-auto text-[11px] text-faint font-mono">v0.2 · heuristic</span>
+            </div>
+            <p class="text-[14px] text-dim leading-[1.65]">
+              Classify a pose-keypoint sequence (MediaPipe 33-point format, 20–90 frames)
+              into a MODAPTS code. Current implementation is a geometric rule-based
+              classifier — supervised model coming once labeled manufacturing video is available.
+            </p>
+          </div>
+<pre class="code-block !rounded-none !border-0 !border-l hairline">
+<span class="k">POST</span> /api/v1/classify
+<span class="p">{</span>
+  <span class="s">"landmark_format"</span>: <span class="s">"mediapipe_33"</span>,
+  <span class="s">"fps"</span>: <span class="n">30</span>,
+  <span class="s">"active_side"</span>: <span class="s">"bilateral"</span>,
+  <span class="s">"frames"</span>: <span class="p">[</span> <span class="c">/* 20-90 frames */</span> <span class="p">]</span>
+<span class="p">}</span>
+
+<span class="c">// → { "code": "B17", "confidence": 0.84, ... }</span></pre>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- § 04 — Concepts & rationale                                                 -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section id="concepts" class="section border-t hairline bg-panel">
+  <div class="max-w-[1160px] mx-auto px-6">
+
+    <div class="section-head">
+      <span class="num">§ 04</span>
+      <span class="title">Concepts &amp; rationale</span>
+      <span class="meta">background reading</span>
+    </div>
+
+    <div class="grid md:grid-cols-12 gap-10">
+      <div class="md:col-span-5">
+        <p class="lede">
+          MODAPTS has been used in manufacturing for decades, but it has remained
+          locked inside proprietary desktop software and Excel files. OpenPTS brings
+          the same calculations into the API era, so any system can call them &mdash;
+          directly from a video.
+        </p>
+        <p class="lede mt-3">
+          Target integrations: MES, ERP, digital-twin simulations, custom production
+          planning, AI-powered ergonomic assessment, and robot-learning pipelines.
+        </p>
+
+        <div class="mt-8 space-y-2 text-[13px] text-dim font-mono">
+          <p>✓ Complete library of MODAPTS motion codes</p>
+          <p>✓ Standard time with configurable allowances</p>
+          <p>✓ Repetitive Strain Index (0–10) with WMSD targets</p>
+          <p>✓ Pose-sequence → motion code classification</p>
+          <p>✓ Open source · MIT · free to use</p>
+        </div>
+      </div>
+
+      <div class="md:col-span-7">
+        <div class="bg-paper border hairline rounded-lg p-6 md:p-8">
+          <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-4">Key concepts</p>
+          <dl class="space-y-5">
+            <div class="grid grid-cols-[120px,1fr] gap-4">
+              <dt class="font-mono text-[13px] text-ink font-semibold">1 MOD</dt>
+              <dd class="text-[14px] text-dim leading-[1.6]">0.129 seconds. The atomic time unit. 7.75 MODs equal one second.</dd>
+            </div>
+            <div class="grid grid-cols-[120px,1fr] gap-4 border-t hairline pt-5">
+              <dt class="font-mono text-[13px] text-ink font-semibold">Element</dt>
+              <dd class="text-[14px] text-dim leading-[1.6]">A single human motion (e.g. <code class="text-ink">M3</code> — move object, forearm length). Coded by body region, not object distance.</dd>
+            </div>
+            <div class="grid grid-cols-[120px,1fr] gap-4 border-t hairline pt-5">
+              <dt class="font-mono text-[13px] text-ink font-semibold">Sequence</dt>
+              <dd class="text-[14px] text-dim leading-[1.6]">An ordered list of elements covering one task cycle. Sum of MODs × 0.129 = base time.</dd>
+            </div>
+            <div class="grid grid-cols-[120px,1fr] gap-4 border-t hairline pt-5">
+              <dt class="font-mono text-[13px] text-ink font-semibold">Allowance</dt>
+              <dd class="text-[14px] text-dim leading-[1.6]">Personal-fatigue-delay percentage added to base time. 15% is the standard automotive value; OSHA/NIOSH typically use 10–20%.</dd>
+            </div>
+            <div class="grid grid-cols-[120px,1fr] gap-4 border-t hairline pt-5">
+              <dt class="font-mono text-[13px] text-ink font-semibold">Standard time</dt>
+              <dd class="text-[14px] text-dim leading-[1.6]"><span class="font-mono text-ink">base_time × (1 + allowances_pct/100)</span>. The number on the line balance sheet.</dd>
+            </div>
+            <div class="grid grid-cols-[120px,1fr] gap-4 border-t hairline pt-5">
+              <dt class="font-mono text-[13px] text-ink font-semibold">RSI</dt>
+              <dd class="text-[14px] text-dim leading-[1.6]">Repetitive Strain Index, 0–10. Engineering signal inspired by RULA / REBA / NIOSH literature for flagging high-load elements. Not a clinical instrument.</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- § 05 — Applications                                                         -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="max-w-[1160px] mx-auto px-6">
+
+    <div class="section-head">
+      <span class="num">§ 05</span>
+      <span class="title">Applications</span>
+      <span class="meta">typical integration patterns</span>
+    </div>
+
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-rule border hairline rounded-lg overflow-hidden">
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/01</p>
+        <p class="font-semibold text-[15px] text-ink">Line balancing</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Calculate cycle times for assembly stations to optimise production flow.</p>
+      </div>
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/02</p>
+        <p class="font-semibold text-[15px] text-ink">Capacity planning</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Estimate labour requirements for new products before tooling is built.</p>
+      </div>
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/03</p>
+        <p class="font-semibold text-[15px] text-ink">Ergonomic assessment</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Identify high-frequency, high-strain motions for WMSD injury prevention.</p>
+      </div>
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/04</p>
+        <p class="font-semibold text-[15px] text-ink">Digital twins</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Feed standard times into simulation models for virtual factory optimisation.</p>
+      </div>
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/05</p>
+        <p class="font-semibold text-[15px] text-ink">ERP integration</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Auto-calculate labour standards for Bills of Materials — no manual studies.</p>
+      </div>
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/06</p>
+        <p class="font-semibold text-[15px] text-ink">Lean manufacturing</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Eliminate waste by quantifying non-value-added motions across the cycle.</p>
+      </div>
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/07</p>
+        <p class="font-semibold text-[15px] text-ink">Cost estimation</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Build accurate labour cost models for quoting, budgeting, and bid response.</p>
+      </div>
+      <div class="bg-panel p-6">
+        <p class="font-mono text-[11px] text-accent mb-2">/08</p>
+        <p class="font-semibold text-[15px] text-ink">Robot learning</p>
+        <p class="text-[13px] text-dim leading-[1.6] mt-2">Label demonstration video for imitation-learning pipelines via <code class="text-ink">/classify</code>.</p>
+      </div>
+      <div class="bg-panel p-6 flex items-center justify-center text-center">
+        <a href="https://github.com/siddhit/openpts-api" target="_blank" rel="noopener"
+           class="text-[13px] text-accent font-mono hover:underline">
+          → Open a PR with yours
+        </a>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- § 06 — Disclaimer & references                                              -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section class="section border-t hairline bg-panel">
+  <div class="max-w-[1160px] mx-auto px-6 grid md:grid-cols-12 gap-10">
+
+    <div class="md:col-span-12">
+      <div class="section-head">
+        <span class="num">§ 06</span>
+        <span class="title">Disclaimer &amp; references</span>
+        <span class="meta">trademark notice · source list</span>
+      </div>
+    </div>
+
+    <div class="md:col-span-5">
+      <p class="lede">
+        MODAPTS&reg; is a registered trademark of the International MODAPTS Association.
+        OpenPTS is an independent, open-source implementation of predetermined time
+        standards calculations and is not affiliated with, endorsed by, or supported
+        by the International MODAPTS Association.
+      </p>
+      <p class="lede mt-3">
+        For official MODAPTS training, certification, and commercial software,
+        please visit the trademark holder directly:
+      </p>
+      <a href="https://modapts.org" target="_blank" rel="noopener"
+         class="inline-flex items-center gap-1.5 mt-4 text-[14px] font-medium text-ink underline decoration-faint hover:decoration-accent">
+        modapts.org
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7 17L17 7M9 7h8v8"/></svg>
+      </a>
+      <p class="text-[12.5px] text-faint mt-8 leading-[1.6]">
+        This tool is intended for educational, research, and open-source development purposes.
+      </p>
+    </div>
+
+    <div class="md:col-span-7">
+      <p class="text-[11px] font-mono uppercase tracking-wider text-faint mb-3">Source list</p>
+      <p class="lede">
+        OpenPTS is grounded in publicly documented MODAPTS principles and motion codes
+        from academic literature and industrial engineering textbooks.
+      </p>
+
+      <ul class="mt-5 divide-y hairline border-t border-b hairline">
+        <li><a href="https://www.eisbrennerpg.com/about-modapts/" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[01]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">About MODAPTS®</span>
+          <span class="text-[12px] text-faint font-mono">eisbrennerpg.com ↗</span>
+        </a></li>
+        <li><a href="https://www.6sigma.us/work-measurement/modapts-modular-arrangement-of-predetermined-time-standards/" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[02]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">MODAPTS: The simple language for analysing work</span>
+          <span class="text-[12px] text-faint font-mono">6sigma.us ↗</span>
+        </a></li>
+        <li><a href="https://www.isixsigma.com/dictionary/modular-arrangements-of-predetermined-time-standards-modapts/" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[03]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">Unlocking improvement opportunities with MODAPTS</span>
+          <span class="text-[12px] text-faint font-mono">isixsigma.com ↗</span>
+        </a></li>
+        <li><a href="https://www.researchgate.net/figure/MODAPTS-movement-codes_fig2_353073640" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[04]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">MODAPTS movement codes (scientific diagram)</span>
+          <span class="text-[12px] text-faint font-mono">researchgate.net ↗</span>
+        </a></li>
+        <li><a href="https://www.researchgate.net/figure/The-21-types-of-basic-actions-in-the-MODAPTS_tbl1_374694190" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[05]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">The 21 basic actions in MODAPTS</span>
+          <span class="text-[12px] text-faint font-mono">researchgate.net ↗</span>
+        </a></li>
+        <li><a href="https://www.iise.org/uploadedfiles/IIE/Community/Technical_Societies_and_Divisions/SWS/sws1102.pdf" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[06]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">Applying MODAPTS standards (PDF)</span>
+          <span class="text-[12px] text-faint font-mono">iise.org ↗</span>
+        </a></li>
+        <li><a href="https://onlinelibrary.wiley.com/doi/full/10.1609/aimag.v26i3.1824" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[07]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">Ergonomics analysis using MODAPTS — AI Magazine</span>
+          <span class="text-[12px] text-faint font-mono">wiley.com ↗</span>
+        </a></li>
+        <li><a href="https://www.sugoyaindia.com/modapts/" target="_blank" rel="noopener" class="flex items-baseline gap-3 py-3 group">
+          <span class="font-mono text-[11px] text-faint w-8">[08]</span>
+          <span class="text-[13.5px] text-ink group-hover:text-accent transition-colors flex-1">Discover MODAPTS</span>
+          <span class="text-[12px] text-faint font-mono">sugoyaindia.com ↗</span>
+        </a></li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- § 07 — Author                                                               -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<section id="about" class="section">
+  <div class="max-w-[1160px] mx-auto px-6 grid md:grid-cols-12 gap-10 items-start">
+
+    <div class="md:col-span-12">
+      <div class="section-head">
+        <span class="num">§ 07</span>
+        <span class="title">Author</span>
+        <span class="meta">contact · roadmap</span>
+      </div>
+    </div>
+
+    <div class="md:col-span-5">
+      <p class="text-[16px] text-ink font-semibold mb-3">Sid Sanghavi</p>
+      <p class="lede">
+        Licensed MODAPTS Practitioner (via Ford Motor Company, 2015).
+        M.S. Industrial &amp; Systems Engineering, Virginia Tech.
+        4+ years as Senior Assembly Systems Engineer at Ford.
+        Industrial-engineering experience across automotive manufacturing, IoT,
+        and AI-powered products.
+      </p>
+
+      <div class="mt-7 flex flex-wrap items-center gap-2">
+        <a href="https://siddh.it" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 bg-ink text-paper px-4 py-2.5 rounded-md text-[13px] font-medium hover:bg-accent transition-colors">
+          siddh.it
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 17L17 7M9 7h8v8"/></svg>
+        </a>
+        <a href="https://linkedin.com/in/SiddhitSanghavi" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 border hairline bg-panel px-4 py-2.5 rounded-md text-[13px] font-medium text-ink hover:border-ink/40 transition-colors">
+          LinkedIn ↗
+        </a>
+        <a href="https://github.com/siddhit" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 border hairline bg-panel px-4 py-2.5 rounded-md text-[13px] font-medium text-ink hover:border-ink/40 transition-colors">
+          GitHub ↗
+        </a>
+        <a href="mailto:siddhits@gmail.com"
+           class="inline-flex items-center gap-2 border hairline bg-panel px-4 py-2.5 rounded-md text-[13px] font-medium text-ink hover:border-ink/40 transition-colors">
+          Email ↗
+        </a>
+      </div>
+    </div>
+
+    <div class="md:col-span-7">
+      <div class="bg-paper border hairline rounded-lg p-6 md:p-8">
+        <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider mb-4">Roadmap</p>
+        <ul class="space-y-2.5 text-[13.5px]">
+          <li class="flex items-start gap-3"><span class="font-mono text-emerald-600 mt-0.5">✓</span><span class="text-dim">Core MODAPTS motion library (17 codes)</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-emerald-600 mt-0.5">✓</span><span class="text-dim">Time-study calculations with allowances</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-emerald-600 mt-0.5">✓</span><span class="text-dim">Interactive API documentation (Swagger / OpenAPI 3.0)</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-emerald-600 mt-0.5">✓</span><span class="text-dim">Public deployment (Vercel)</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-emerald-600 mt-0.5">✓</span><span class="text-dim">Ergonomic risk scoring (RSI 0–10)</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-emerald-600 mt-0.5">✓</span><span class="text-dim">Pose-sequence classifier (geometric heuristic)</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-faint mt-0.5">○</span><span class="text-faint">Complete motion library (30+ codes)</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-faint mt-0.5">○</span><span class="text-faint">PDF / Excel report generation</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-faint mt-0.5">○</span><span class="text-faint">Supervised CV classifier (labeled training data)</span></li>
+          <li class="flex items-start gap-3"><span class="font-mono text-faint mt-0.5">○</span><span class="text-faint">MTM and MOST standards</span></li>
+        </ul>
+        <div class="mt-7 pt-5 border-t hairline">
+          <p class="text-[13px] text-dim leading-[1.65]">
+            Contributions welcome — open an issue or PR on
+            <a href="https://github.com/siddhit/openpts-api" target="_blank" rel="noopener"
+               class="text-ink underline decoration-faint hover:decoration-accent">GitHub</a>.
+            Especially valuable: additional motion codes, labeled video data, and
+            production-environment edge cases.
           </p>
         </div>
-      </div>` : '<p class="text-sm text-gray-500">No critical recommendations.</p>';
+      </div>
+    </div>
 
-    // All recommendations
-    document.getElementById('all-recs').innerHTML = recs.map((r, i) => `
-      <div class="bg-gray-800/50 rounded-lg p-3">
-        <div class="flex items-start gap-2">
-          <span class="text-xs text-gray-600 font-mono mt-0.5">${i+1}.</span>
-          <div>
-            <p class="text-xs font-medium text-white">${r.action}</p>
-            <p class="text-xs text-gray-500 mt-1 leading-relaxed">${r.detail}</p>
-          </div>
-          <span class="ml-auto text-xs text-emerald-500 flex-shrink-0">−${r.expected_rsi_reduction}</span>
-        </div>
-      </div>`).join('');
+  </div>
+</section>
 
-    // Raw JSON
-    document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
-  }
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- Footer                                                                      -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<footer class="border-t hairline">
+  <div class="max-w-[1160px] mx-auto px-6 py-10 grid sm:grid-cols-2 gap-6 items-start">
+    <div>
+      <div class="flex items-center gap-2.5">
+        <div class="w-6 h-6 rounded bg-ink text-paper font-mono font-bold text-[10px] flex items-center justify-center">O</div>
+        <span class="font-semibold text-[14px] text-ink">OpenPTS</span>
+        <span class="font-mono text-[11px] text-faint">v0.2.0 · MIT</span>
+      </div>
+      <p class="text-[12px] text-faint mt-3 leading-[1.6] max-w-md">
+        © 2026 Sid Sanghavi. Open Predetermined Time Standards. Independent of
+        the International MODAPTS Association.
+      </p>
+    </div>
+    <div class="sm:text-right">
+      <div class="flex sm:justify-end flex-wrap gap-x-5 gap-y-2 text-[12.5px] text-dim font-mono">
+        <a href="#demo"   class="hover:text-ink">Demo</a>
+        <a href="#codes"  class="hover:text-ink">Codes</a>
+        <a href="#api"    class="hover:text-ink">API</a>
+        <a href="https://openpts-api.vercel.app/docs" target="_blank" rel="noopener" class="hover:text-ink">Swagger ↗</a>
+        <a href="https://github.com/siddhit/openpts-api" target="_blank" rel="noopener" class="hover:text-ink">GitHub ↗</a>
+        <a href="https://modapts.org" target="_blank" rel="noopener" class="hover:text-ink">MODAPTS ↗</a>
+        <a href="https://siddh.it" target="_blank" rel="noopener" class="hover:text-ink">siddh.it ↗</a>
+      </div>
+    </div>
+  </div>
+</footer>
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
-  function toggleSection(id) {
-    document.getElementById(id).classList.toggle('hidden');
-  }
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<!-- Scripts                                                                     -->
+<!-- ─────────────────────────────────────────────────────────────────────────── -->
+<script src="demo.js"></script>
 
-  // ── File loading ──────────────────────────────────────────────────────────────
-  function loadVideoFile(file) {
-    vid.src = URL.createObjectURL(file);
-    dropZone.classList.add('hidden');
-    vidWrap.classList.remove('hidden');
-
-    // Try loading annotations.json from same directory (won't work from file://)
-    // Annotations can be set by calling window.setAnnotations(json) from console
-    // or by loading via the script below.
-
-    buildFeed();
-    vid.play().catch(() => {});
-  }
-
-  fileInput.addEventListener('change', e => {
-    if (e.target.files[0]) loadVideoFile(e.target.files[0]);
-  });
-
-  ['dragover','dragenter'].forEach(ev =>
-    dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('drag-over'); })
-  );
-  ['dragleave','dragend'].forEach(ev =>
-    dropZone.addEventListener(ev, () => dropZone.classList.remove('drag-over'))
-  );
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropZone.classList.remove('drag-over');
-    const f = e.dataTransfer.files[0];
-    if (f && f.type.startsWith('video/')) loadVideoFile(f);
-  });
-
-  // ── Load annotations.json ─────────────────────────────────────────────────────
-  // Called automatically if annotations.json is in the same directory.
-  // Also callable from the browser console: window.setAnnotations(json)
-  window.setAnnotations = function(json) {
-    if (json.motion_segments) {
-      SEQ = json.motion_segments.map(s => ({
-        code:      s.code,
-        qty:       s.quantity,
-        label:     s.label || s.code,
-        cat:       s.category || 'move',
-        region:    s.body_region || s.region || 'arm',
-        mv:        s.mod_value,
-        start_pct: s.start_pct,
-        end_pct:   s.end_pct,
-      }));
-    }
-    if (json.pose_keyframes) {
-      poseFrames = json.pose_keyframes;
-    }
-    buildFeed();
-    console.log('✅ Annotations loaded:', SEQ.length, 'segments,', poseFrames.length, 'pose frames');
-  };
-
-  fetch('./annotations.json')
-    .then(r => r.ok ? r.json() : null)
-    .then(j => { if (j) window.setAnnotations(j); })
-    .catch(() => {});   // silent fail — annotations are optional
-
-  // ── Init ──────────────────────────────────────────────────────────────────────
-  buildFeed();
-
-  </script>
 </body>
 </html>
