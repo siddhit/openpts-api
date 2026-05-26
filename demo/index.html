@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenPTS — Manufacturing Motion Analysis Demo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #080d1a; }
+
+    @keyframes pulse-border {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); }
+      50%       { box-shadow: 0 0 0 6px rgba(59,130,246,0); }
+    }
+    .seg-active { animation: pulse-border 1.8s ease-in-out infinite; }
+
+    @keyframes slide-up {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .slide-up { animation: slide-up 0.5s ease-out forwards; }
+
+    @keyframes fade-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .fade-in { animation: fade-in 0.4s ease-out forwards; }
+
+    .rsi-bar   { transition: width 0.9s ease-out, background-color 0.4s ease; }
+    .stat-val  { transition: all 0.2s ease-out; }
+
+    video      { background: #0a0f1e; display: block; width: 100%; }
+
+    .drop-zone {
+      border: 2px dashed #1f2937;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .drop-zone.drag-over, .drop-zone:hover {
+      border-color: #3b82f6;
+      background: rgba(59,130,246,0.05);
+    }
+
+    /* Skeleton canvas overlay */
+    #skeleton-canvas {
+      position: absolute; top: 0; left: 0;
+      pointer-events: none;
+    }
+
+    /* Scrollable feed */
+    #seq-feed { max-height: 380px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #1f2937 transparent; }
+  </style>
+</head>
+
+<body class="text-white min-h-screen">
+
+  <!-- ── Header ────────────────────────────────────────────────────────────── -->
+  <header class="border-b border-gray-800/60 px-5 py-3.5 flex items-center justify-between bg-gray-900/40">
+    <div class="flex items-center gap-3">
+      <div class="w-7 h-7 bg-blue-600 rounded-md flex items-center justify-center font-bold text-xs tracking-tight">O</div>
+      <span class="font-semibold text-white">OpenPTS</span>
+      <span class="hidden sm:inline text-gray-600 text-sm">Open Predetermined Time Standards</span>
+    </div>
+    <div class="flex items-center gap-4 text-xs">
+      <div class="flex items-center gap-1.5">
+        <div id="api-dot" class="w-2 h-2 rounded-full bg-gray-600"></div>
+        <span id="api-status" class="text-gray-500">API ready</span>
+      </div>
+      <a href="https://openpts-api.vercel.app/docs" target="_blank"
+         class="text-blue-400 hover:text-blue-300 transition-colors">API ↗</a>
+      <a href="https://github.com/siddhit/openpts-api" target="_blank"
+         class="text-gray-500 hover:text-gray-300 transition-colors">GitHub ↗</a>
+    </div>
+  </header>
+
+  <!-- ── Pipeline breadcrumb ───────────────────────────────────────────────── -->
+  <div class="px-5 py-2.5 bg-gray-900/20 border-b border-gray-800/40 overflow-x-auto">
+    <div class="flex items-center gap-2 text-xs text-gray-600 whitespace-nowrap min-w-max">
+      <span class="text-blue-400 font-medium">① Video</span>
+      <span class="text-gray-700">──▶</span>
+      <span>MediaPipe Pose</span>
+      <span class="text-gray-700">──▶</span>
+      <span>MODAPTS Classifier</span>
+      <span class="text-gray-700">──▶</span>
+      <span class="text-blue-400 font-medium">② OpenPTS /sequence/analyze</span>
+      <span class="text-gray-700">──▶</span>
+      <span>③ Standard Time + Ergonomic Risk</span>
+    </div>
+  </div>
+
+  <!-- ── Main layout ───────────────────────────────────────────────────────── -->
+  <main class="p-4 lg:p-6">
+    <div class="max-w-6xl mx-auto space-y-5">
+
+      <div class="grid grid-cols-1 lg:grid-cols-5 gap-5">
+
+        <!-- ── Left column: video + stats (3/5) ──────────────────────────── -->
+        <div class="lg:col-span-3 flex flex-col gap-4">
+
+          <!-- Video player -->
+          <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+
+            <!-- Drop zone -->
+            <div id="drop-zone"
+                 class="drop-zone aspect-video flex flex-col items-center justify-center gap-4 cursor-pointer p-6">
+              <div class="w-14 h-14 rounded-full bg-gray-800 flex items-center justify-center">
+                <svg class="w-7 h-7 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                        d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+                </svg>
+              </div>
+              <div class="text-center">
+                <p class="font-medium text-white text-sm">Drop your video here</p>
+                <p class="text-gray-500 text-xs mt-1">or click to select · MP4, MOV, WebM</p>
+              </div>
+              <p class="text-xs text-gray-700 text-center max-w-xs">
+                Record the task: walk to box → bend → grasp → lift to chest → walk → place on table
+              </p>
+              <input type="file" id="file-input" accept="video/*" class="hidden">
+              <button onclick="document.getElementById('file-input').click()"
+                      class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium transition-colors">
+                Select Video
+              </button>
+            </div>
+
+            <!-- Video + canvas overlay (hidden until file loaded) -->
+            <div id="video-wrap" class="hidden relative aspect-video">
+              <video id="vid" preload="metadata"></video>
+              <canvas id="skeleton-canvas"></canvas>
+
+              <!-- Active code chip -->
+              <div id="code-chip"
+                   class="hidden absolute top-3 left-3 bg-black/75 backdrop-blur-sm
+                          rounded-lg px-3 py-1.5 flex items-center gap-2">
+                <span id="chip-code" class="font-mono font-bold text-lg leading-none"></span>
+                <span id="chip-label" class="text-xs text-gray-300"></span>
+              </div>
+
+              <!-- Progress bar overlay -->
+              <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-gray-800">
+                <div id="progress-bar" class="h-full bg-blue-500 transition-none" style="width:0%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Stats row -->
+          <div class="grid grid-cols-3 gap-3">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-3.5 text-center">
+              <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">MODs</p>
+              <p id="s-mods" class="stat-val text-3xl font-bold tabular-nums">0</p>
+              <p class="text-xs text-gray-700 mt-0.5">of 72</p>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-3.5 text-center">
+              <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Base Time</p>
+              <p id="s-time" class="stat-val text-3xl font-bold tabular-nums">0.00</p>
+              <p class="text-xs text-gray-700 mt-0.5">seconds</p>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-3.5 text-center">
+              <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Risk Index</p>
+              <p id="s-rsi" class="stat-val text-3xl font-bold tabular-nums">0.0</p>
+              <p class="text-xs text-gray-700 mt-0.5">/ 10</p>
+            </div>
+          </div>
+
+          <!-- RSI bar -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3">
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-xs text-gray-600 uppercase tracking-wider">Motion Load Index</span>
+              <span id="rsi-cat" class="text-xs font-medium text-gray-600">—</span>
+            </div>
+            <div class="h-2 bg-gray-800 rounded-full overflow-hidden">
+              <div id="rsi-bar" class="rsi-bar h-full rounded-full bg-gray-700" style="width:0%"></div>
+            </div>
+            <div class="flex justify-between mt-1.5 text-xs text-gray-700">
+              <span>Low</span><span>Moderate</span><span>High</span><span>Very High</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ── Right column: sequence feed (2/5) ─────────────────────────── -->
+        <div class="lg:col-span-2">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl h-full flex flex-col">
+            <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
+              <span class="text-sm font-medium text-gray-200">MODAPTS Sequence</span>
+              <span class="text-xs text-gray-600">Heavy box · floor → table</span>
+            </div>
+
+            <!-- Sequence items -->
+            <div id="seq-feed" class="p-3 space-y-1.5 flex-1"></div>
+
+            <!-- Legend -->
+            <div class="px-4 py-3 border-t border-gray-800 flex flex-wrap gap-x-4 gap-y-1">
+              <span class="text-xs text-gray-700">Category colours:</span>
+              <span class="text-xs text-slate-400">Walk</span>
+              <span class="text-xs text-orange-400">Bend</span>
+              <span class="text-xs text-emerald-400">Get</span>
+              <span class="text-xs text-blue-400">Move</span>
+              <span class="text-xs text-violet-400">Put</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ── Study result card (hidden until API responds) ─────────────────── -->
+      <div id="study-card" class="hidden slide-up">
+        <div class="bg-gray-900 border border-blue-900/50 rounded-xl overflow-hidden">
+
+          <!-- Card header -->
+          <div class="px-5 py-3.5 bg-blue-950/40 border-b border-blue-900/30 flex items-center gap-2.5">
+            <div class="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0"></div>
+            <span class="font-medium text-blue-300 text-sm">OpenPTS Analysis Result</span>
+            <code class="ml-auto text-xs text-gray-600 bg-gray-800 px-2 py-0.5 rounded">
+              POST /api/v1/sequence/analyze
+            </code>
+          </div>
+
+          <div class="p-5">
+
+            <!-- Spinner -->
+            <div id="card-loading" class="flex items-center justify-center py-10 gap-3">
+              <div class="w-5 h-5 border-2 border-blue-500/70 border-t-transparent rounded-full animate-spin"></div>
+              <span class="text-gray-400 text-sm">Calling OpenPTS API…</span>
+            </div>
+
+            <!-- Results -->
+            <div id="card-results" class="hidden fade-in">
+
+              <!-- Top metrics -->
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                <div class="text-center">
+                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Standard Time</p>
+                  <p id="r-std"  class="text-2xl font-bold"></p>
+                  <p class="text-xs text-gray-700 mt-0.5">15% allowance</p>
+                </div>
+                <div class="text-center">
+                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Units / Hour</p>
+                  <p id="r-uph"  class="text-2xl font-bold text-white"></p>
+                  <p class="text-xs text-gray-700 mt-0.5">at standard rate</p>
+                </div>
+                <div class="text-center">
+                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Total MODs</p>
+                  <p id="r-mods" class="text-2xl font-bold text-white"></p>
+                  <p class="text-xs text-gray-700 mt-0.5">1 MOD = 0.129 s</p>
+                </div>
+                <div class="text-center">
+                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-1">Risk Category</p>
+                  <p id="r-cat"  class="text-2xl font-bold"></p>
+                  <p id="r-rsi"  class="text-xs text-gray-700 mt-0.5"></p>
+                </div>
+              </div>
+
+              <!-- Breakdown + recommendation -->
+              <div class="grid sm:grid-cols-2 gap-5">
+
+                <!-- By body region -->
+                <div>
+                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-3">MODs by Body Region</p>
+                  <div id="r-regions" class="space-y-2.5"></div>
+                </div>
+
+                <!-- Top recommendation -->
+                <div>
+                  <p class="text-xs text-gray-600 uppercase tracking-wider mb-3">Top Engineering Recommendation</p>
+                  <div id="r-rec" class="bg-gray-800/60 rounded-lg p-4"></div>
+                </div>
+
+              </div>
+
+              <!-- All recommendations (collapsible) -->
+              <div class="mt-4 pt-4 border-t border-gray-800">
+                <button onclick="toggleSection('all-recs')"
+                        class="text-xs text-gray-600 hover:text-gray-300 transition-colors">
+                  All recommendations ↓
+                </button>
+                <div id="all-recs" class="hidden mt-3 space-y-2" ></div>
+              </div>
+
+              <!-- Raw JSON -->
+              <div class="mt-3">
+                <button onclick="toggleSection('raw-json')"
+                        class="text-xs text-gray-600 hover:text-gray-300 transition-colors">
+                  Raw API response ↓
+                </button>
+                <pre id="raw-json"
+                     class="hidden mt-2 text-xs text-gray-400 bg-gray-800/60 rounded-lg p-4
+                            overflow-auto max-h-64 leading-relaxed"></pre>
+              </div>
+
+            </div><!-- /card-results -->
+          </div>
+        </div>
+      </div><!-- /study-card -->
+
+    </div><!-- /max-w -->
+  </main>
+
+  <!-- ── Script ─────────────────────────────────────────────────────────────── -->
+  <script>
+  'use strict';
+
+  // ── Config ──────────────────────────────────────────────────────────────────
+  const API = 'https://openpts-api.vercel.app';
+
+  // Category → Tailwind colour tokens (must exist in Tailwind CDN scan)
+  const CAT = {
+    walk:       { border: 'border-slate-600',   text: 'text-slate-300',   bg: 'bg-slate-800/40'   },
+    bend:       { border: 'border-orange-700',  text: 'text-orange-300',  bg: 'bg-orange-950/40'  },
+    get:        { border: 'border-emerald-700', text: 'text-emerald-300', bg: 'bg-emerald-950/40' },
+    move:       { border: 'border-blue-700',    text: 'text-blue-300',    bg: 'bg-blue-950/40'    },
+    put:        { border: 'border-violet-700',  text: 'text-violet-300',  bg: 'bg-violet-950/40'  },
+    sit:        { border: 'border-yellow-700',  text: 'text-yellow-300',  bg: 'bg-yellow-950/40'  },
+    stand:      { border: 'border-yellow-700',  text: 'text-yellow-300',  bg: 'bg-yellow-950/40'  },
+    eye_action: { border: 'border-cyan-700',    text: 'text-cyan-300',    bg: 'bg-cyan-950/40'    },
+  };
+
+  // Body-region strain weights (mirrors ergonomics.py)
+  const W = { body: 3.5, full_arm: 2.5, arm: 2.0, hand: 1.5, leg: 1.2, fingers: 1.0, eyes: 0.5 };
+  const RSI_MAX = 150;
+
+  // ── Sequence definition ──────────────────────────────────────────────────────
+  // start_pct / end_pct are proportions of MODAPTS base time (72 MODs total).
+  // These are replaced with video-accurate values once annotations.json is loaded.
+  const DEFAULT_SEQUENCE = [
+    { code:'W5',  qty:4, label:'Walk to box',       cat:'walk', region:'leg',      mv:5,  start_pct:0.000, end_pct:0.278 },
+    { code:'B17', qty:1, label:'Bend to floor',     cat:'bend', region:'body',     mv:17, start_pct:0.278, end_pct:0.514 },
+    { code:'G3',  qty:1, label:'Complex grasp',     cat:'get',  region:'hand',     mv:3,  start_pct:0.514, end_pct:0.556 },
+    { code:'M5',  qty:1, label:'Lift to chest',     cat:'move', region:'full_arm', mv:5,  start_pct:0.556, end_pct:0.625 },
+    { code:'W5',  qty:5, label:'Walk to table',     cat:'walk', region:'leg',      mv:5,  start_pct:0.625, end_pct:0.972 },
+    { code:'P2',  qty:1, label:'Place on table',    cat:'put',  region:'hand',     mv:2,  start_pct:0.972, end_pct:1.000 },
+  ];
+
+  let SEQ = DEFAULT_SEQUENCE.map(s => ({ ...s }));
+
+  // ── State ────────────────────────────────────────────────────────────────────
+  let activeIdx  = -1;
+  let poseFrames = [];   // loaded from annotations.json if available
+
+  // ── DOM refs ─────────────────────────────────────────────────────────────────
+  const vid       = document.getElementById('vid');
+  const dropZone  = document.getElementById('drop-zone');
+  const vidWrap   = document.getElementById('video-wrap');
+  const canvas    = document.getElementById('skeleton-canvas');
+  const ctx       = canvas.getContext('2d');
+  const fileInput = document.getElementById('file-input');
+  const sMods     = document.getElementById('s-mods');
+  const sTime     = document.getElementById('s-time');
+  const sRsi      = document.getElementById('s-rsi');
+  const rsiBar    = document.getElementById('rsi-bar');
+  const rsiCat    = document.getElementById('rsi-cat');
+  const progBar   = document.getElementById('progress-bar');
+
+  // ── Sequence feed ─────────────────────────────────────────────────────────────
+  function buildFeed() {
+    const feed = document.getElementById('seq-feed');
+    feed.innerHTML = SEQ.map((s, i) => {
+      const c = CAT[s.cat] || CAT.walk;
+      const mods = s.mv * s.qty;
+      const t = (mods * 0.129).toFixed(2);
+      const codeStr = s.qty > 1 ? `${s.code} ×${s.qty}` : s.code;
+      return `
+        <div id="seg${i}"
+             class="flex items-center gap-3 px-3 py-2.5 rounded-lg border
+                    transition-all duration-300 opacity-35
+                    border-gray-800 bg-transparent"
+             data-i="${i}">
+          <div id="seg${i}-icon" class="w-4 h-4 flex items-center justify-center flex-shrink-0">
+            <div class="w-1.5 h-1.5 rounded-full bg-gray-700"></div>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="font-mono font-bold text-sm ${c.text}">${codeStr}</span>
+              <span class="text-xs text-gray-500 truncate">${s.label}</span>
+            </div>
+            <div class="text-xs text-gray-700 mt-0.5 capitalize">
+              ${s.region.replace('_',' ')} · ${mods} MODs · ${t}s
+            </div>
+          </div>
+          <div class="text-xs font-mono text-gray-700 flex-shrink-0">${mods}</div>
+        </div>`;
+    }).join('');
+  }
+
+  function activateSeg(i) {
+    if (activeIdx >= 0) deactivateSeg(activeIdx);
+    activeIdx = i;
+    if (i < 0) return;
+
+    const el = document.getElementById(`seg${i}`);
+    const s  = SEQ[i];
+    const c  = CAT[s.cat] || CAT.walk;
+
+    el.classList.remove('opacity-35', 'border-gray-800', 'bg-transparent');
+    el.classList.add('opacity-100', `border-blue-600`, 'bg-blue-950/30', 'seg-active');
+
+    // Code chip on video
+    const chip = document.getElementById('code-chip');
+    document.getElementById('chip-code').textContent = s.code;
+    document.getElementById('chip-label').textContent = s.label;
+    chip.classList.remove('hidden');
+
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function deactivateSeg(i) {
+    const el = document.getElementById(`seg${i}`);
+    if (!el) return;
+    el.classList.remove('opacity-100', 'border-blue-600', 'bg-blue-950/30', 'seg-active');
+    el.classList.add('opacity-60', 'border-gray-800', 'bg-transparent');
+  }
+
+  function completeSeg(i) {
+    const el   = document.getElementById(`seg${i}`);
+    const icon = document.getElementById(`seg${i}-icon`);
+    if (!el) return;
+    el.classList.remove('seg-active', 'border-blue-600', 'bg-blue-950/30', 'opacity-100');
+    el.classList.add('border-gray-800', 'bg-transparent', 'opacity-50');
+    if (icon) icon.innerHTML = `
+      <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+      </svg>`;
+  }
+
+  // ── Running stats ─────────────────────────────────────────────────────────────
+  function updateStats(elapsedMods) {
+    const time = (elapsedMods * 0.129).toFixed(2);
+
+    // Incremental RSI: sum contributions from completed + partial current segment
+    let raw = 0, consumed = 0;
+    for (const s of SEQ) {
+      const segMods = s.mv * s.qty;
+      const contrib = Math.min(segMods, Math.max(0, elapsedMods - consumed));
+      raw += contrib * (W[s.region] || 1.0);
+      consumed += segMods;
+      if (consumed >= elapsedMods) break;
+    }
+    const rsi = Math.min(10, (raw / RSI_MAX) * 10);
+
+    sMods.textContent = Math.round(elapsedMods);
+    sTime.textContent = time;
+    sRsi.textContent  = rsi.toFixed(1);
+
+    const pct = rsi / 10 * 100;
+    rsiBar.style.width = pct + '%';
+
+    let col, catLabel;
+    if      (rsi >= 7.5) { col = 'bg-red-500';     catLabel = 'VERY HIGH'; }
+    else if (rsi >= 5.0) { col = 'bg-orange-500';   catLabel = 'HIGH'; }
+    else if (rsi >= 2.5) { col = 'bg-yellow-400';   catLabel = 'MODERATE'; }
+    else                 { col = 'bg-emerald-500';   catLabel = 'LOW'; }
+
+    rsiBar.className = `rsi-bar h-full rounded-full ${col}`;
+    rsiCat.textContent  = catLabel;
+    rsiCat.className    = `text-xs font-medium ${
+      rsi >= 7.5 ? 'text-red-400' : rsi >= 5.0 ? 'text-orange-400' :
+      rsi >= 2.5 ? 'text-yellow-400' : 'text-emerald-400'
+    }`;
+  }
+
+  // ── Skeleton drawing ──────────────────────────────────────────────────────────
+  const CONNECTIONS = [
+    ['left_shoulder','right_shoulder'],
+    ['left_shoulder','left_elbow'],['left_elbow','left_wrist'],
+    ['right_shoulder','right_elbow'],['right_elbow','right_wrist'],
+    ['left_shoulder','left_hip'],['right_shoulder','right_hip'],
+    ['left_hip','right_hip'],
+    ['left_hip','left_knee'],['left_knee','left_ankle'],
+    ['right_hip','right_knee'],['right_knee','right_ankle'],
+  ];
+
+  function drawSkeleton(landmarks) {
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    if (!landmarks) return;
+
+    ctx.strokeStyle = 'rgba(59,130,246,0.7)';
+    ctx.lineWidth   = 2;
+    for (const [a, b] of CONNECTIONS) {
+      const pa = landmarks[a], pb = landmarks[b];
+      if (pa && pb && pa.visibility > 0.4 && pb.visibility > 0.4) {
+        ctx.beginPath();
+        ctx.moveTo(pa.x * W, pa.y * H);
+        ctx.lineTo(pb.x * W, pb.y * H);
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = 'rgba(96,165,250,0.9)';
+    for (const lm of Object.values(landmarks)) {
+      if (lm.visibility > 0.4) {
+        ctx.beginPath();
+        ctx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function getSkeletonAtTime(ms) {
+    if (!poseFrames.length) return null;
+    let closest = poseFrames[0];
+    for (const f of poseFrames) {
+      if (Math.abs(f.timestamp_ms - ms) < Math.abs(closest.timestamp_ms - ms))
+        closest = f;
+    }
+    return closest.landmarks;
+  }
+
+  // ── Video sync ────────────────────────────────────────────────────────────────
+  vid.addEventListener('timeupdate', () => {
+    if (!vid.duration) return;
+    const progress = vid.currentTime / vid.duration;
+
+    // Progress bar
+    progBar.style.width = (progress * 100) + '%';
+
+    // Active segment
+    const newIdx = SEQ.findIndex(s => progress >= s.start_pct && progress < s.end_pct);
+    if (newIdx !== activeIdx) {
+      if (activeIdx >= 0 && newIdx > activeIdx) completeSeg(activeIdx);
+      activateSeg(newIdx);
+    }
+
+    // Running MODs (continuous)
+    let elapsed = 0;
+    for (let i = 0; i < SEQ.length; i++) {
+      const s = SEQ[i], sm = s.mv * s.qty;
+      if (i < newIdx) {
+        elapsed += sm;
+      } else if (i === newIdx) {
+        const segProg = (progress - s.start_pct) / Math.max(0.001, s.end_pct - s.start_pct);
+        elapsed += sm * Math.min(1, Math.max(0, segProg));
+        break;
+      }
+    }
+    updateStats(elapsed);
+
+    // Skeleton
+    if (poseFrames.length) {
+      const lm = getSkeletonAtTime(vid.currentTime * 1000);
+      drawSkeleton(lm);
+    }
+  });
+
+  vid.addEventListener('ended', async () => {
+    SEQ.forEach((_, i) => completeSeg(i));
+    activateSeg(-1);
+    document.getElementById('code-chip').classList.add('hidden');
+    updateStats(SEQ.reduce((s, seg) => s + seg.mv * seg.qty, 0));
+    progBar.style.width = '100%';
+
+    document.getElementById('study-card').classList.remove('hidden');
+    await callAPI();
+  });
+
+  vid.addEventListener('loadedmetadata', () => {
+    canvas.width  = vid.videoWidth  || vid.offsetWidth;
+    canvas.height = vid.videoHeight || vid.offsetHeight;
+  });
+
+  // ── API call ──────────────────────────────────────────────────────────────────
+  async function callAPI() {
+    setApiStatus('calling');
+    try {
+      const res = await fetch(`${API}/api/v1/sequence/analyze`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:           'Heavy Box Floor to Table',
+          description:    'Worker picks up heavy box from floor, walks to table, places it down',
+          allowances_pct: 15,
+          motions:        SEQ.map(s => ({ code: s.code, quantity: s.qty })),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setApiStatus('ok');
+      renderCard(data);
+    } catch (err) {
+      setApiStatus('error');
+      document.getElementById('card-loading').innerHTML =
+        `<p class="text-red-400 text-sm">API error: ${err.message}</p>`;
+      console.error(err);
+    }
+  }
+
+  function setApiStatus(state) {
+    const dot  = document.getElementById('api-dot');
+    const text = document.getElementById('api-status');
+    const map  = {
+      calling: ['bg-yellow-400 animate-pulse', 'Calling API…'],
+      ok:      ['bg-emerald-400', 'Response received'],
+      error:   ['bg-red-400', 'API error'],
+    };
+    const [cls, label] = map[state] || ['bg-gray-600', 'Ready'];
+    dot.className  = `w-2 h-2 rounded-full ${cls}`;
+    text.textContent = label;
+  }
+
+  // ── Study card render ─────────────────────────────────────────────────────────
+  function renderCard(d) {
+    document.getElementById('card-loading').classList.add('hidden');
+    const res = document.getElementById('card-results');
+    res.classList.remove('hidden');
+
+    document.getElementById('r-std').textContent  = d.standard_time_seconds.toFixed(2) + 's';
+    document.getElementById('r-uph').textContent  = d.units_per_hour.toLocaleString();
+    document.getElementById('r-mods').textContent = d.total_mods;
+
+    const cat = d.ergonomic_risk.risk_category;
+    const rsi = d.ergonomic_risk.repetitive_strain_index;
+    const catEl = document.getElementById('r-cat');
+    catEl.textContent = cat;
+    catEl.className   = `text-2xl font-bold ${
+      cat === 'VERY HIGH' ? 'text-red-400'    :
+      cat === 'HIGH'      ? 'text-orange-400' :
+      cat === 'MODERATE'  ? 'text-yellow-400' : 'text-emerald-400'
+    }`;
+    document.getElementById('r-rsi').textContent = `RSI ${rsi}/10`;
+
+    // Region breakdown bars
+    document.getElementById('r-regions').innerHTML =
+      Object.entries(d.breakdown_by_body_region).map(([region, info]) => `
+        <div>
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-gray-400 capitalize">${region.replace('_',' ')}</span>
+            <span class="text-gray-600">${info.total_mods} MODs · ${info.pct_of_task}%</span>
+          </div>
+          <div class="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div class="h-full bg-blue-500 rounded-full transition-all duration-700"
+                 style="width:${info.pct_of_task}%"></div>
+          </div>
+        </div>`).join('');
+
+    // Top recommendation
+    const recs = d.ergonomic_risk.recommendations;
+    const rec1 = recs[0];
+    document.getElementById('r-rec').innerHTML = rec1 ? `
+      <div class="flex gap-3">
+        <span class="text-orange-400 text-base mt-0.5 flex-shrink-0">⚠</span>
+        <div>
+          <p class="text-sm font-medium text-white leading-snug">${rec1.action}</p>
+          <p class="text-xs text-gray-400 mt-1.5 leading-relaxed">${rec1.detail}</p>
+          <p class="text-xs text-emerald-400 mt-2">
+            Expected RSI reduction: −${rec1.expected_rsi_reduction}
+          </p>
+        </div>
+      </div>` : '<p class="text-sm text-gray-500">No critical recommendations.</p>';
+
+    // All recommendations
+    document.getElementById('all-recs').innerHTML = recs.map((r, i) => `
+      <div class="bg-gray-800/50 rounded-lg p-3">
+        <div class="flex items-start gap-2">
+          <span class="text-xs text-gray-600 font-mono mt-0.5">${i+1}.</span>
+          <div>
+            <p class="text-xs font-medium text-white">${r.action}</p>
+            <p class="text-xs text-gray-500 mt-1 leading-relaxed">${r.detail}</p>
+          </div>
+          <span class="ml-auto text-xs text-emerald-500 flex-shrink-0">−${r.expected_rsi_reduction}</span>
+        </div>
+      </div>`).join('');
+
+    // Raw JSON
+    document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────────
+  function toggleSection(id) {
+    document.getElementById(id).classList.toggle('hidden');
+  }
+
+  // ── File loading ──────────────────────────────────────────────────────────────
+  function loadVideoFile(file) {
+    vid.src = URL.createObjectURL(file);
+    dropZone.classList.add('hidden');
+    vidWrap.classList.remove('hidden');
+
+    // Try loading annotations.json from same directory (won't work from file://)
+    // Annotations can be set by calling window.setAnnotations(json) from console
+    // or by loading via the script below.
+
+    buildFeed();
+    vid.play().catch(() => {});
+  }
+
+  fileInput.addEventListener('change', e => {
+    if (e.target.files[0]) loadVideoFile(e.target.files[0]);
+  });
+
+  ['dragover','dragenter'].forEach(ev =>
+    dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('drag-over'); })
+  );
+  ['dragleave','dragend'].forEach(ev =>
+    dropZone.addEventListener(ev, () => dropZone.classList.remove('drag-over'))
+  );
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f && f.type.startsWith('video/')) loadVideoFile(f);
+  });
+
+  // ── Load annotations.json ─────────────────────────────────────────────────────
+  // Called automatically if annotations.json is in the same directory.
+  // Also callable from the browser console: window.setAnnotations(json)
+  window.setAnnotations = function(json) {
+    if (json.motion_segments) {
+      SEQ = json.motion_segments.map(s => ({
+        code:      s.code,
+        qty:       s.quantity,
+        label:     s.label || s.code,
+        cat:       s.category || 'move',
+        region:    s.body_region || s.region || 'arm',
+        mv:        s.mod_value,
+        start_pct: s.start_pct,
+        end_pct:   s.end_pct,
+      }));
+    }
+    if (json.pose_keyframes) {
+      poseFrames = json.pose_keyframes;
+    }
+    buildFeed();
+    console.log('✅ Annotations loaded:', SEQ.length, 'segments,', poseFrames.length, 'pose frames');
+  };
+
+  fetch('./annotations.json')
+    .then(r => r.ok ? r.json() : null)
+    .then(j => { if (j) window.setAnnotations(j); })
+    .catch(() => {});   // silent fail — annotations are optional
+
+  // ── Init ──────────────────────────────────────────────────────────────────────
+  buildFeed();
+
+  </script>
+</body>
+</html>
