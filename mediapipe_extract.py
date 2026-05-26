@@ -36,6 +36,8 @@ except ImportError:
 
 try:
     import mediapipe as mp
+    from mediapipe.tasks import python  as _mpt
+    from mediapipe.tasks.python import vision as _mpv
 except ImportError:
     sys.exit("❌  mediapipe not installed.\n    Run: pip install mediapipe")
 
@@ -86,8 +88,26 @@ SKELETON_LM = {
 }
 
 
+# ── Model download ─────────────────────────────────────────────────────────────
+MODEL_URL  = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
+)
+MODEL_PATH = Path(__file__).parent / "pose_landmarker_full.task"
+
+def ensure_model():
+    if MODEL_PATH.exists():
+        return
+    import urllib.request
+    print(f"⬇️   Downloading MediaPipe pose model (~30 MB, one-time)…")
+    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+    print(f"    Saved → {MODEL_PATH.name}")
+
+
 # ── Extraction ─────────────────────────────────────────────────────────────────
 def extract(video_path: str, skip: int = 1) -> tuple:
+    ensure_model()
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         sys.exit(f"❌  Cannot open: {video_path}")
@@ -99,40 +119,47 @@ def extract(video_path: str, skip: int = 1) -> tuple:
     print(f"\n📹  {Path(video_path).name}")
     print(f"    {total_frames} frames · {fps:.1f} fps · {duration_ms/1000:.1f}s")
 
-    pose_cfg = mp.solutions.pose.Pose(
-        static_image_mode=False,
-        model_complexity=1,
-        min_detection_confidence=0.5,
+    # MediaPipe 0.10+ Tasks API
+    options = _mpv.PoseLandmarkerOptions(
+        base_options=_mpt.BaseOptions(model_asset_path=str(MODEL_PATH)),
+        running_mode=_mpv.RunningMode.IMAGE,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5,
     )
 
     frames, idx = [], 0
-    while cap.isOpened():
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if idx % max(1, skip) == 0:
-            rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose_cfg.process(rgb)
-            if results.pose_landmarks:
-                lms = {}
-                for i, lm in enumerate(results.pose_landmarks.landmark):
-                    if i < len(LM_NAMES):
-                        lms[LM_NAMES[i]] = dict(
-                            x=round(lm.x, 4), y=round(lm.y, 4),
-                            z=round(lm.z, 4), visibility=round(lm.visibility, 3),
-                        )
-                frames.append(dict(
-                    frame_index=idx,
-                    timestamp_ms=int(idx / fps * 1000),
-                    landmarks=lms,
-                ))
-        idx += 1
-        if idx % 30 == 0:
-            print(f"\r    Extracting: {idx/total_frames*100:.0f}%", end='', flush=True)
+    with _mpv.PoseLandmarker.create_from_options(options) as landmarker:
+        while cap.isOpened():
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if idx % max(1, skip) == 0:
+                rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result   = landmarker.detect(mp_image)
+
+                if result.pose_landmarks:
+                    lms = {}
+                    for i, lm in enumerate(result.pose_landmarks[0]):
+                        if i < len(LM_NAMES):
+                            lms[LM_NAMES[i]] = dict(
+                                x=round(lm.x, 4),
+                                y=round(lm.y, 4),
+                                z=round(lm.z, 4),
+                                visibility=round(getattr(lm, 'visibility', 1.0) or 1.0, 3),
+                            )
+                    frames.append(dict(
+                        frame_index=idx,
+                        timestamp_ms=int(idx / fps * 1000),
+                        landmarks=lms,
+                    ))
+            idx += 1
+            if idx % 30 == 0:
+                print(f"\r    Extracting: {idx/total_frames*100:.0f}%", end='', flush=True)
 
     cap.release()
-    pose_cfg.close()
     print(f"\r    Extracting: 100% — {len(frames)} frames detected")
     return frames, dict(fps=fps, total_frames=total_frames, duration_ms=duration_ms)
 
