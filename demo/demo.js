@@ -361,6 +361,8 @@ function loadSample() {
   const seqHeader = document.getElementById('seq-header-task');
   if (seqHeader) seqHeader.textContent = 'Delivery unload · van → ground';
 
+  document.getElementById('sample-credit')?.classList.remove('hidden');
+
   const v = vid();
   v.src = './sample.mp4';
 
@@ -734,6 +736,7 @@ const fileInp  = () => document.getElementById('file-input');
 
 async function loadVideoFile(file) {
   if (analysisRunning) return;
+  document.getElementById('sample-credit')?.classList.add('hidden');
 
   resetFeed();
   SEQ = [];
