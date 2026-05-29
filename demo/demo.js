@@ -773,15 +773,32 @@ async function loadVideoFile(file) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Canvas sync — keeps buffer size = element size so 1 buffer px = 1 CSS px
+// ─────────────────────────────────────────────────────────────────────────────
+function syncCanvas() {
+  const c = canvas();
+  const v = vid();
+  if (!c || !v) return;
+  // Size the drawing buffer to the element's CSS display size.
+  // Using getBoundingClientRect() is exact even with sub-pixel layouts.
+  const rect = c.getBoundingClientRect();
+  const w = Math.round(rect.width)  || v.offsetWidth  || 640;
+  const h = Math.round(rect.height) || v.offsetHeight || 360;
+  if (c.width !== w || c.height !== h) {
+    c.width  = w;
+    c.height = h;
+  }
+}
+
 function attachVideoHandlers() {
   const v   = vid();
   const c   = canvas();
   const ctx = c.getContext('2d');
 
-  v.addEventListener('loadedmetadata', () => {
-    c.width  = v.videoWidth  || v.offsetWidth;
-    c.height = v.videoHeight || v.offsetHeight;
-  });
+  // Sync canvas size whenever video metadata loads or window resizes
+  v.addEventListener('loadedmetadata', syncCanvas);
+  window.addEventListener('resize', syncCanvas);
 
   v.addEventListener('timeupdate', () => {
     if (!v.duration || !SEQ.length) return;
@@ -807,8 +824,9 @@ function attachVideoHandlers() {
     updateStats(elapsed);
 
     if (poseFrames.length) {
+      syncCanvas();
       const lm = getSkeletonAtTime(v.currentTime * 1000);
-      drawSkeleton(ctx, c.width, c.height, lm);
+      drawSkeleton(ctx, v, lm);
     }
   });
 
@@ -838,17 +856,56 @@ const CONNECTIONS = [
   ['right_hip',      'right_knee'],  ['right_knee', 'right_ankle'],
 ];
 
-function drawSkeleton(ctx, W, H, landmarks) {
-  ctx.clearRect(0, 0, W, H);
+// Compute the actual video content rectangle within the element.
+// With object-contain, the video is letterboxed/pillarboxed when aspect ratios differ.
+// Landmarks must be mapped to this content rect, not the full element.
+function videoContentRect(videoEl) {
+  const W  = videoEl.offsetWidth;
+  const H  = videoEl.offsetHeight;
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+
+  if (!vw || !vh || !W || !H) return { x: 0, y: 0, w: W, h: H };
+
+  const videoAspect = vw / vh;
+  const elemAspect  = W  / H;
+
+  if (Math.abs(videoAspect - elemAspect) < 0.01) {
+    // Perfect match — no bars
+    return { x: 0, y: 0, w: W, h: H };
+  } else if (videoAspect > elemAspect) {
+    // Video wider than container → letterbox top/bottom
+    const h = W / videoAspect;
+    return { x: 0, y: (H - h) / 2, w: W, h };
+  } else {
+    // Video taller than container → pillarbox left/right
+    const w = H * videoAspect;
+    return { x: (W - w) / 2, y: 0, w, h: H };
+  }
+}
+
+function drawSkeleton(ctx, videoEl, landmarks) {
+  const cw = ctx.canvas.width;
+  const ch = ctx.canvas.height;
+  ctx.clearRect(0, 0, cw, ch);
   if (!landmarks) return;
+
+  // Map the video content rect from element pixels → canvas buffer pixels.
+  // (Canvas buffer is synced to element CSS px via syncCanvas, so scale = 1:1.)
+  const r = videoContentRect(videoEl);
+
+  // Convert normalised landmark [0,1] to canvas pixels
+  const px = x => r.x + x * r.w;
+  const py = y => r.y + y * r.h;
+
   ctx.strokeStyle = 'rgba(194,65,12,0.9)';
-  ctx.lineWidth   = 2.5;
+  ctx.lineWidth   = Math.max(1.5, r.w / 320);   // scale with content width
   for (const [a, b] of CONNECTIONS) {
     const pa = landmarks[a], pb = landmarks[b];
     if (pa && pb && pa.visibility > 0.4 && pb.visibility > 0.4) {
       ctx.beginPath();
-      ctx.moveTo(pa.x * W, pa.y * H);
-      ctx.lineTo(pb.x * W, pb.y * H);
+      ctx.moveTo(px(pa.x), py(pa.y));
+      ctx.lineTo(px(pb.x), py(pb.y));
       ctx.stroke();
     }
   }
@@ -856,7 +913,7 @@ function drawSkeleton(ctx, W, H, landmarks) {
   for (const lm of Object.values(landmarks)) {
     if (lm.visibility > 0.4) {
       ctx.beginPath();
-      ctx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI * 2);
+      ctx.arc(px(lm.x), py(lm.y), Math.max(2, r.w / 213), 0, Math.PI * 2);
       ctx.fill();
     }
   }
