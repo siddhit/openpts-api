@@ -166,23 +166,9 @@ function buildCodesGrid() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sequence (sample task: heavy box, floor → table)
+// Current MODAPTS sequence — populated by setAnnotations() or analyzeVideoWithMediaPipe()
 // ─────────────────────────────────────────────────────────────────────────────
-const DEFAULT_SEQUENCE = [
-  { code:'W5',  qty:4, label:'Walk to box',    cat:'walk', region:'leg',      mv:5,  start_pct:0.000, end_pct:0.278 },
-  { code:'B17', qty:1, label:'Bend to floor',  cat:'bend', region:'body',     mv:17, start_pct:0.278, end_pct:0.514 },
-  { code:'G3',  qty:1, label:'Complex grasp',  cat:'get',  region:'hand',     mv:3,  start_pct:0.514, end_pct:0.556 },
-  { code:'M5',  qty:1, label:'Lift to chest',  cat:'move', region:'full_arm', mv:5,  start_pct:0.556, end_pct:0.625 },
-  { code:'W5',  qty:5, label:'Walk to table',  cat:'walk', region:'leg',      mv:5,  start_pct:0.625, end_pct:0.972 },
-  { code:'P2',  qty:1, label:'Place on table', cat:'put',  region:'hand',     mv:2,  start_pct:0.972, end_pct:1.000 },
-];
-let SEQ = DEFAULT_SEQUENCE.map(s => ({ ...s }));
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Annotations — loaded from annotations.json when available.
-// window.setAnnotations(json) may also be called from the browser console
-// or programmatically after loading the demo with a known video.
-// ─────────────────────────────────────────────────────────────────────────────
+let SEQ        = [];
 let poseFrames = [];
 
 window.setAnnotations = function(json) {
@@ -202,14 +188,11 @@ window.setAnnotations = function(json) {
     poseFrames = json.pose_keyframes;
   }
   buildFeed();
+  const total = SEQ.reduce((s, seg) => s + seg.mv * seg.qty, 0);
+  const el = document.getElementById('total-mods-label');
+  if (el) el.textContent = total || '—';
   console.log('✅ Annotations loaded:', SEQ.length, 'segments,', poseFrames.length, 'pose frames');
 };
-
-// Auto-fetch annotations.json from the same directory (works on Vercel, not file://)
-fetch('./annotations.json')
-  .then(r => r.ok ? r.json() : null)
-  .then(j => { if (j) window.setAnnotations(j); })
-  .catch(() => {}); // silent fail — annotations are optional
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sequence feed
@@ -219,6 +202,11 @@ let activeIdx = -1;
 function buildFeed() {
   const feed = document.getElementById('seq-feed');
   if (!feed) return;
+
+  if (!SEQ.length) {
+    feed.innerHTML = '<p class="text-[12px] text-faint font-mono p-4 text-center">No sequence loaded</p>';
+    return;
+  }
 
   feed.innerHTML = SEQ.map((s, i) => {
     const catText = CAT_TEXT[s.cat] || 'text-cat-walk';
@@ -260,14 +248,9 @@ function activateSeg(i) {
   el.classList.remove('opacity-55', 'bg-panel');
   el.classList.add('opacity-100', 'bg-accenttint', 'border-accent', 'seg-active');
 
-  // Update both chips (real video + sample stage)
   document.getElementById('chip-code').textContent  = s.code;
   document.getElementById('chip-label').textContent = s.label;
   document.getElementById('code-chip').classList.remove('hidden');
-
-  document.getElementById('sample-chip-code').textContent  = s.code;
-  document.getElementById('sample-chip-label').textContent = s.label;
-  document.getElementById('sample-chip').classList.remove('hidden');
 
   el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -337,170 +320,371 @@ function updateStats(elapsedMods) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sample mode — simulated playback (no video file required)
+// Processing overlay — shown while MediaPipe runs in browser
 // ─────────────────────────────────────────────────────────────────────────────
-let sampleRunning = false;
-let sampleStart   = 0;
-const SAMPLE_DURATION_MS = 9500;
+function showProcessingOverlay(msg, progress) {
+  const overlay = document.getElementById('processing-overlay');
+  const msgEl   = document.getElementById('processing-msg');
+  const bar     = document.getElementById('processing-bar');
+  if (!overlay) return;
+  overlay.classList.remove('hidden');
+  if (msgEl) msgEl.textContent = msg || 'Analyzing…';
+  if (bar)   bar.style.width   = ((progress || 0) * 100) + '%';
+}
 
-function startSample() {
-  if (sampleRunning) return;
-  sampleRunning = true;
+function updateProcessingOverlay(msg, progress) {
+  const msgEl = document.getElementById('processing-msg');
+  const bar   = document.getElementById('processing-bar');
+  if (msgEl) msgEl.textContent = msg;
+  if (bar)   bar.style.width   = ((progress || 0) * 100) + '%';
+}
 
+function hideProcessingOverlay() {
+  const overlay = document.getElementById('processing-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sample mode — plays the pre-analyzed delivery video
+// ─────────────────────────────────────────────────────────────────────────────
+function loadSample() {
   resetFeed();
+  SEQ = [];
+  poseFrames = [];
+
   document.getElementById('study-card').classList.add('hidden');
   document.getElementById('card-loading').classList.remove('hidden');
   document.getElementById('card-results').classList.add('hidden');
-
   document.getElementById('drop-zone').classList.add('hidden');
-  document.getElementById('video-wrap').classList.add('hidden');
-  document.getElementById('sample-stage').classList.remove('hidden');
+  vidWrap().classList.remove('hidden');
 
-  document.getElementById('sample-box').style.left    = '12%';
-  document.getElementById('sample-box').style.bottom  = '22%';
-  document.getElementById('sample-box').style.opacity = '1';
-  positionFigure(0);
+  const seqHeader = document.getElementById('seq-header-task');
+  if (seqHeader) seqHeader.textContent = 'Delivery unload · van → ground';
 
-  sampleStart = performance.now();
-  requestAnimationFrame(stepSample);
+  const v = vid();
+  v.src = './sample.mp4';
+
+  // Load pre-computed sample annotations then play
+  fetch('./sample_annotations.json')
+    .then(r => r.ok ? r.json() : null)
+    .then(j => {
+      if (j) window.setAnnotations(j);
+      v.currentTime = 0;
+      v.play().catch(() => {});
+    })
+    .catch(() => {
+      v.play().catch(() => {});
+    });
 }
 
-function positionFigure(progress) {
-  const fig   = document.getElementById('sample-figure');
-  const torso = document.getElementById('sf-torso');
-  const head  = document.getElementById('sf-head');
-  const arml  = document.getElementById('sf-arml');
-  const armr  = document.getElementById('sf-armr');
-  const legl  = document.getElementById('sf-legl');
-  const legr  = document.getElementById('sf-legr');
-  const box   = document.getElementById('sample-box');
+// ─────────────────────────────────────────────────────────────────────────────
+// MediaPipe landmark names (same order as Python)
+// ─────────────────────────────────────────────────────────────────────────────
+const LM_NAMES = [
+  'nose','left_eye_inner','left_eye','left_eye_outer',
+  'right_eye_inner','right_eye','right_eye_outer',
+  'left_ear','right_ear','mouth_left','mouth_right',
+  'left_shoulder','right_shoulder','left_elbow','right_elbow',
+  'left_wrist','right_wrist','left_pinky','right_pinky',
+  'left_index','right_index','left_thumb','right_thumb',
+  'left_hip','right_hip','left_knee','right_knee',
+  'left_ankle','right_ankle','left_heel','right_heel',
+  'left_foot_index','right_foot_index',
+];
 
-  const seg = SEQ.findIndex(s => progress >= s.start_pct && progress < s.end_pct);
-  const idx  = Math.max(0, seg);
-  const s    = SEQ[idx] || SEQ[SEQ.length - 1];
-  const local = (progress - s.start_pct) / Math.max(0.0001, s.end_pct - s.start_pct);
+// ─────────────────────────────────────────────────────────────────────────────
+// MODAPTS classifier (JS port of classifier.py)
+// ─────────────────────────────────────────────────────────────────────────────
+function avg(arr) {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+function stdDev(arr) {
+  if (arr.length < 2) return 0;
+  const m = avg(arr);
+  return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
+}
+function vecDist(a, b) {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+}
+function arrRange(arr) {
+  return arr.length ? Math.max(...arr) - Math.min(...arr) : 0;
+}
 
-  let figLeft    = 5;
-  let bend       = 0;
-  let armReach   = 0;
-  let boxLeft    = 12;
-  let boxBottom  = 22;
-  let boxOpacity = 1;
+const RULES = {
+  bend_shoulder_drop: 0.12,
+  sit_hip_drop:       0.15,
+  walk_ankle_osc:     0.015,
+  wrist_M5: 0.22, wrist_M4: 0.14, wrist_M3: 0.08, wrist_M2: 0.04,
+  wrist_G3: 0.02, wrist_G1: 0.005,
+  wrist_y_range_M5: 0.20,
+};
 
-  if (s.code === 'W5' && s.label === 'Walk to box') {
-    figLeft = 5 + local * 5;
-    const phase = (progress * 40) % (Math.PI * 2);
-    legl.setAttribute('x2', 18 + Math.sin(phase) * 6);
-    legr.setAttribute('x2', 42 - Math.sin(phase) * 6);
-    arml.setAttribute('x2', 14 - Math.sin(phase) * 4);
-    armr.setAttribute('x2', 46 + Math.sin(phase) * 4);
-  } else if (s.code === 'B17') {
-    figLeft  = 10;
-    bend     = local * 36;
-    armReach = local;
-  } else if (s.code === 'G3') {
-    figLeft    = 10;
-    bend       = 36;
-    armReach   = 1;
-    boxOpacity = 1 - local * 0.5;
-  } else if (s.code === 'M5') {
-    figLeft   = 10;
-    bend      = 36 * (1 - local);
-    armReach  = 1 - local;
-    boxLeft   = 12;
-    boxBottom = 22 + local * 14;
-  } else if (s.code === 'W5' && s.label === 'Walk to table') {
-    figLeft   = 10 + local * 60;
-    boxLeft   = 12 + local * 60;
-    boxBottom = 36;
-    const phase = (progress * 40) % (Math.PI * 2);
-    legl.setAttribute('x2', 18 + Math.sin(phase) * 6);
-    legr.setAttribute('x2', 42 - Math.sin(phase) * 6);
-    arml.setAttribute('x2', 18 + Math.sin(phase) * 2);
-    armr.setAttribute('x2', 42 - Math.sin(phase) * 2);
-  } else if (s.code === 'P2') {
-    figLeft   = 70;
-    boxLeft   = 75;
-    boxBottom = 28;
+function extractFeatures(frames) {
+  if (frames.length < 2) return null;
+  const col = (lm, axis) =>
+    frames.map(f => f.landmarks[lm]?.[axis]).filter(v => v != null);
+
+  const lsy = col('left_shoulder', 'y'),  rsy = col('right_shoulder', 'y');
+  const lhy = col('left_hip', 'y'),       rhy = col('right_hip', 'y');
+  const lay = col('left_ankle', 'y'),     ray = col('right_ankle', 'y');
+  const lwx = col('left_wrist', 'x'),     lwy = col('left_wrist', 'y');
+  const rwx = col('right_wrist', 'x'),    rwy = col('right_wrist', 'y');
+
+  const tail4 = a => a.slice(-Math.min(4, a.length));
+  const head4 = a => a.slice(0,  Math.min(4, a.length));
+
+  const shoulderDrop =
+    (avg(tail4(lsy)) + avg(tail4(rsy))) / 2 -
+    (avg(head4(lsy)) + avg(head4(rsy))) / 2;
+
+  const hipDisp = Math.abs(
+    (avg(tail4(lhy)) + avg(tail4(rhy))) / 2 -
+    (avg(head4(lhy)) + avg(head4(rhy))) / 2
+  );
+
+  const ankleOscillation = stdDev([...lay, ...ray]);
+
+  const lStart = { x: avg(head4(lwx)), y: avg(head4(lwy)) };
+  const lEnd   = { x: avg(tail4(lwx)), y: avg(tail4(lwy)) };
+  const rStart = { x: avg(head4(rwx)), y: avg(head4(rwy)) };
+  const rEnd   = { x: avg(tail4(rwx)), y: avg(tail4(rwy)) };
+
+  const wristDisp      = Math.max(vecDist(lStart, lEnd), vecDist(rStart, rEnd));
+  const wristYRange    = Math.max(arrRange(lwy), arrRange(rwy));
+  const effectiveWrist = Math.max(wristDisp, wristYRange * 0.85);
+
+  return { shoulderDrop, hipDisp, ankleOscillation, wristDisp, wristYRange, effectiveWrist };
+}
+
+function classifySegment(frames) {
+  const f = extractFeatures(frames);
+  if (!f) return { code: 'G0', cat: 'get', region: 'fingers', mv: 0 };
+
+  if (f.shoulderDrop > RULES.bend_shoulder_drop)
+    return { code: 'B17', cat: 'bend', region: 'body', mv: 17 };
+  if (f.hipDisp > RULES.sit_hip_drop && f.ankleOscillation < RULES.walk_ankle_osc)
+    return f.shoulderDrop > 0
+      ? { code: 'S30',  cat: 'sit',   region: 'body', mv: 30 }
+      : { code: 'ST30', cat: 'stand', region: 'body', mv: 30 };
+  if (f.ankleOscillation > RULES.walk_ankle_osc)
+    return { code: 'W5', cat: 'walk', region: 'leg', mv: 5 };
+  if (f.effectiveWrist >= RULES.wrist_M5 || f.wristYRange >= RULES.wrist_y_range_M5)
+    return { code: 'M5', cat: 'move', region: 'full_arm', mv: 5 };
+  if (f.effectiveWrist >= RULES.wrist_M4)
+    return { code: 'M4', cat: 'move', region: 'arm', mv: 4 };
+  if (f.effectiveWrist >= RULES.wrist_M3)
+    return { code: 'M3', cat: 'move', region: 'arm', mv: 3 };
+  if (f.effectiveWrist >= RULES.wrist_M2)
+    return { code: 'M2', cat: 'move', region: 'hand', mv: 2 };
+  if (f.effectiveWrist >= RULES.wrist_G3)
+    return { code: 'G3', cat: 'get', region: 'hand', mv: 3 };
+  if (f.effectiveWrist >= RULES.wrist_G1)
+    return { code: 'G1', cat: 'get', region: 'fingers', mv: 1 };
+  return { code: 'G0', cat: 'get', region: 'fingers', mv: 0 };
+}
+
+// Velocity-based segmentation + classification — works for any video
+function detectAndClassify(frames, durationMs) {
+  if (frames.length < 3) return [];
+
+  // Per-frame max velocity across wrists + ankles
+  const vels = [0];
+  for (let i = 1; i < frames.length; i++) {
+    const a = frames[i - 1].landmarks, b = frames[i].landmarks;
+    let v = 0;
+    for (const lm of ['left_wrist', 'right_wrist', 'left_ankle', 'right_ankle']) {
+      if (a[lm] && b[lm]) {
+        const dx = b[lm].x - a[lm].x, dy = b[lm].y - a[lm].y;
+        v = Math.max(v, Math.sqrt(dx * dx + dy * dy));
+      }
+    }
+    vels.push(v);
   }
 
-  fig.style.left   = figLeft + '%';
-  fig.style.bottom = '22%';
-  torso.setAttribute('y2', 65 + bend);
-  legl.setAttribute('y1', 65 + bend);
-  legr.setAttribute('y1', 65 + bend);
-  head.setAttribute('cy', 14 + bend * 0.4);
+  // 5-point median smooth
+  const smooth = vels.map((_, i) => {
+    const w = [...vels.slice(Math.max(0, i - 2), i + 3)].sort((a, b) => a - b);
+    return w[Math.floor(w.length / 2)];
+  });
 
-  if (bend > 0) {
-    torso.setAttribute('x2', 30 + bend * 0.3);
-    head.setAttribute('cx', 30 + bend * 0.45);
-    arml.setAttribute('x1', 30 + bend * 0.18);
-    armr.setAttribute('x1', 30 + bend * 0.18);
-    arml.setAttribute('y1', 35 + bend * 0.4);
-    armr.setAttribute('y1', 35 + bend * 0.4);
-    arml.setAttribute('x2', 14 + bend * 0.4);
-    armr.setAttribute('x2', 46 + bend * 0.4);
-    arml.setAttribute('y2', 55 + bend * 0.6);
-    armr.setAttribute('y2', 55 + bend * 0.6);
-  } else {
-    torso.setAttribute('x2', 30);
-    head.setAttribute('cx', 30);
-    arml.setAttribute('x1', 30);
-    armr.setAttribute('x1', 30);
-    arml.setAttribute('y1', 35);
-    armr.setAttribute('y1', 35);
-    if (armReach > 0) {
-      arml.setAttribute('x2', 18);
-      arml.setAttribute('y2', 55 - armReach * 18);
-      armr.setAttribute('x2', 42);
-      armr.setAttribute('y2', 55 - armReach * 18);
+  const meanV  = avg(smooth);
+  const thr    = meanV * 0.35;
+  const minGap = Math.max(3, Math.floor(frames.length * 0.07));
+
+  // Find velocity valleys (motion transitions)
+  const cuts = [0];
+  for (let i = 2; i < smooth.length - 2; i++) {
+    if (smooth[i] < thr &&
+        smooth[i] <= smooth[i - 1] && smooth[i] <= smooth[i + 1] &&
+        i - cuts[cuts.length - 1] >= minGap) {
+      cuts.push(i);
+    }
+  }
+  cuts.push(frames.length - 1);
+
+  // Classify each segment
+  const seq = [];
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const segFrames = frames.slice(cuts[i], cuts[i + 1] + 1);
+    if (segFrames.length < 2) continue;
+    const cls     = classifySegment(segFrames);
+    const startMs = segFrames[0].timestamp_ms;
+    const endMs   = segFrames[segFrames.length - 1].timestamp_ms;
+
+    // Merge consecutive W5 steps
+    const last = seq[seq.length - 1];
+    if (last && last.code === 'W5' && cls.code === 'W5') {
+      last.qty++;
+      last.end_pct = endMs / durationMs;
+    } else {
+      seq.push({
+        code:      cls.code,
+        qty:       1,
+        label:     cls.code,
+        cat:       cls.cat,
+        region:    cls.region,
+        mv:        cls.mv,
+        start_pct: startMs / durationMs,
+        end_pct:   endMs   / durationMs,
+      });
     }
   }
 
-  box.style.left    = boxLeft   + '%';
-  box.style.bottom  = boxBottom + '%';
-  box.style.opacity = boxOpacity;
+  return seq.length ? seq : [{
+    code: 'M3', qty: 1, label: 'M3', cat: 'move', region: 'arm', mv: 3,
+    start_pct: 0, end_pct: 1,
+  }];
 }
 
-function stepSample(now) {
-  if (!sampleRunning) return;
-  const elapsed = now - sampleStart;
-  const t = Math.min(1, elapsed / SAMPLE_DURATION_MS);
+// ─────────────────────────────────────────────────────────────────────────────
+// Browser-side MediaPipe — lazy-loaded on first video upload
+// ─────────────────────────────────────────────────────────────────────────────
+let poseLandmarker  = null;
+let mpLoading       = false;
+let analysisRunning = false;
 
-  document.getElementById('sample-progress').style.width = (t * 100) + '%';
+async function loadMediaPipe() {
+  if (poseLandmarker) return poseLandmarker;
+  if (mpLoading) return null;
+  mpLoading = true;
 
-  const newIdx = SEQ.findIndex(s => t >= s.start_pct && t < s.end_pct);
-  if (newIdx !== activeIdx && t < 1) {
-    if (activeIdx >= 0 && newIdx > activeIdx) completeSeg(activeIdx);
-    activateSeg(newIdx);
+  updateProcessingOverlay('Loading AI model (first time only)…', 0.05);
+
+  try {
+    const { PoseLandmarker, FilesetResolver } = await import(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs'
+    );
+
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+    );
+
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath:
+          'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+        delegate: 'CPU',
+      },
+      runningMode: 'IMAGE',
+      numPoses: 1,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence:  0.5,
+      minTrackingConfidence:      0.5,
+    });
+
+    mpLoading = false;
+    return poseLandmarker;
+  } catch (err) {
+    mpLoading = false;
+    console.error('MediaPipe load error:', err);
+    return null;
+  }
+}
+
+async function analyzeVideoWithMediaPipe(videoElement) {
+  if (analysisRunning) return false;
+  analysisRunning = true;
+
+  showProcessingOverlay('Loading AI model…', 0.02);
+
+  const lm = await loadMediaPipe();
+  if (!lm) {
+    updateProcessingOverlay('Could not load AI model — check your connection', 0);
+    analysisRunning = false;
+    return false;
   }
 
-  let elapsedMods = 0;
-  for (let i = 0; i < SEQ.length; i++) {
-    const s = SEQ[i], sm = s.mv * s.qty;
-    if      (t >= s.end_pct)   { elapsedMods += sm; }
-    else if (t >= s.start_pct) {
-      const segProg = (t - s.start_pct) / (s.end_pct - s.start_pct);
-      elapsedMods += sm * segProg;
-      break;
+  const duration = videoElement.duration;
+  if (!duration || duration < 0.5) {
+    analysisRunning = false;
+    return false;
+  }
+
+  const SAMPLE_FPS  = 10; // 10 fps — fast enough for gesture classification
+  const totalSteps  = Math.ceil(duration * SAMPLE_FPS);
+
+  // Offscreen canvas at 640×360 — enough for pose detection
+  const canvas  = document.createElement('canvas');
+  canvas.width  = 640;
+  canvas.height = 360;
+  const ctx     = canvas.getContext('2d');
+
+  const keyframes = [];
+
+  for (let i = 0; i <= totalSteps; i++) {
+    const t = Math.min(i / SAMPLE_FPS, duration - 0.05);
+    videoElement.currentTime = t;
+    await new Promise(r => videoElement.addEventListener('seeked', r, { once: true }));
+
+    ctx.drawImage(videoElement, 0, 0, 640, 360);
+    const result = lm.detect(canvas);
+
+    if (result.landmarks && result.landmarks.length > 0) {
+      const landmarks = {};
+      result.landmarks[0].forEach((pt, idx) => {
+        if (idx < LM_NAMES.length) {
+          landmarks[LM_NAMES[idx]] = {
+            x: pt.x, y: pt.y, z: pt.z,
+            visibility: pt.visibility ?? 1.0,
+          };
+        }
+      });
+      keyframes.push({
+        frame_index:  i,
+        timestamp_ms: Math.round(t * 1000),
+        landmarks,
+      });
     }
-  }
-  updateStats(elapsedMods);
-  positionFigure(t);
 
-  if (t < 1) {
-    requestAnimationFrame(stepSample);
-  } else {
-    SEQ.forEach((_, i) => completeSeg(i));
-    activateSeg(-1);
-    document.getElementById('sample-chip').classList.add('hidden');
-    document.getElementById('code-chip').classList.add('hidden');
-    updateStats(SEQ.reduce((s, seg) => s + seg.mv * seg.qty, 0));
-    document.getElementById('sample-progress').style.width = '100%';
-    document.getElementById('study-card').classList.remove('hidden');
-    callAPI();
-    sampleRunning = false;
+    updateProcessingOverlay(
+      `Detecting pose… ${i + 1} / ${totalSteps} frames`,
+      0.1 + 0.8 * (i / totalSteps)
+    );
   }
+
+  if (keyframes.length < 5) {
+    updateProcessingOverlay('No pose detected — make sure a person is clearly visible', 0);
+    analysisRunning = false;
+    return false;
+  }
+
+  updateProcessingOverlay('Classifying motions…', 0.92);
+
+  // Store pose frames for skeleton overlay
+  poseFrames = keyframes;
+
+  // Velocity-based segmentation + MODAPTS classification
+  const detected = detectAndClassify(keyframes, duration * 1000);
+  SEQ = detected;
+
+  const total = SEQ.reduce((s, seg) => s + seg.mv * seg.qty, 0);
+  const el = document.getElementById('total-mods-label');
+  if (el) el.textContent = total || '—';
+
+  buildFeed();
+  hideProcessingOverlay();
+  analysisRunning = false;
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -512,18 +696,45 @@ const vidWrap  = () => document.getElementById('video-wrap');
 const canvas   = () => document.getElementById('skeleton-canvas');
 const fileInp  = () => document.getElementById('file-input');
 
-function loadVideoFile(file) {
+async function loadVideoFile(file) {
+  if (analysisRunning) return;
+
   resetFeed();
+  SEQ = [];
+  poseFrames = [];
+  buildFeed();
+
   document.getElementById('study-card').classList.add('hidden');
   document.getElementById('card-loading').classList.remove('hidden');
   document.getElementById('card-results').classList.add('hidden');
 
+  const seqHeader = document.getElementById('seq-header-task');
+  if (seqHeader) seqHeader.textContent = file.name;
+
+  const totalEl = document.getElementById('total-mods-label');
+  if (totalEl) totalEl.textContent = '—';
+
   const v = vid();
   v.src = URL.createObjectURL(file);
   dropZone().classList.add('hidden');
-  document.getElementById('sample-stage').classList.add('hidden');
   vidWrap().classList.remove('hidden');
-  v.play().catch(() => {});
+
+  // Wait for metadata before analysing
+  await new Promise(r => v.addEventListener('loadedmetadata', r, { once: true }));
+
+  showProcessingOverlay('Loading AI model…', 0.02);
+
+  const ok = await analyzeVideoWithMediaPipe(v);
+
+  if (ok) {
+    v.currentTime = 0;
+    v.play().catch(() => {});
+  } else {
+    hideProcessingOverlay();
+    // Fallback: let the video play without annotations
+    v.currentTime = 0;
+    v.play().catch(() => {});
+  }
 }
 
 function attachVideoHandlers() {
@@ -537,7 +748,7 @@ function attachVideoHandlers() {
   });
 
   v.addEventListener('timeupdate', () => {
-    if (!v.duration) return;
+    if (!v.duration || !SEQ.length) return;
     const progress = v.currentTime / v.duration;
     document.getElementById('progress-bar').style.width = (progress * 100) + '%';
 
@@ -569,7 +780,9 @@ function attachVideoHandlers() {
     SEQ.forEach((_, i) => completeSeg(i));
     activateSeg(-1);
     document.getElementById('code-chip').classList.add('hidden');
-    updateStats(SEQ.reduce((s, seg) => s + seg.mv * seg.qty, 0));
+    if (SEQ.length) {
+      updateStats(SEQ.reduce((s, seg) => s + seg.mv * seg.qty, 0));
+    }
     document.getElementById('progress-bar').style.width = '100%';
     document.getElementById('study-card').classList.remove('hidden');
     await callAPI();
@@ -626,14 +839,15 @@ function getSkeletonAtTime(ms) {
 // API call + result render
 // ─────────────────────────────────────────────────────────────────────────────
 async function callAPI() {
+  if (!SEQ.length) return;
   setApiStatus('calling');
   try {
     const res = await fetch(`${API}/api/v1/sequence/analyze`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name:           'Heavy Box Floor to Table',
-        description:    'Worker picks up heavy box from floor, walks to table, places it down',
+        name:           'Analyzed task',
+        description:    'OpenPTS browser analysis',
         allowances_pct: 15,
         motions: SEQ.map(s => ({ code: s.code, quantity: s.qty })),
       }),
@@ -665,24 +879,28 @@ function fallbackResult(err) {
   for (const [r, m] of Object.entries(regionTotals)) {
     breakdown[r] = { total_mods: m, pct_of_task: +(m / totalMods * 100).toFixed(1) };
   }
+  // Generate a generic recommendation based on the highest-strain segment
+  const highestStrain = SEQ.reduce((best, s) => {
+    const load = s.mv * s.qty * (STRAIN[s.region] || 1.0);
+    return load > best.load ? { s, load } : best;
+  }, { s: null, load: -1 });
+
+  const recs = highestStrain.s ? [{
+    action:  `Reduce ${highestStrain.s.code} element load`,
+    detail:  `The ${highestStrain.s.code} (${highestStrain.s.label || highestStrain.s.code}) element contributes the highest strain load in this sequence. Consider workstation redesign to reduce this motion's frequency or reach distance.`,
+    expected_rsi_reduction: +(rsi * 0.3).toFixed(1),
+  }] : [];
+
   return {
     total_mods: totalMods,
     base_time_seconds: base,
     standard_time_seconds: std,
-    units_per_hour: Math.floor(3600 / std),
+    units_per_hour: std > 0 ? Math.floor(3600 / std) : 0,
     breakdown_by_body_region: breakdown,
     ergonomic_risk: {
       repetitive_strain_index: rsi,
       risk_category: cat,
-      recommendations: [{
-        action:  'Replace floor-level bending with a powered lift table',
-        detail:  'B17 contributes ~40% of the trunk load. A 600 mm lift table eliminates the bend cycle, removing the highest single-element WMSD risk.',
-        expected_rsi_reduction: 3.2,
-      }, {
-        action:  'Reduce walking distance with adjacent staging',
-        detail:  'Bring the box origin within 1 step of the placement table to drop W5×9 to W5×2.',
-        expected_rsi_reduction: 1.1,
-      }],
+      recommendations: recs,
       _fallback: !!err,
       _error: err ? String(err.message) : null,
     },
@@ -723,7 +941,6 @@ function renderCard(d) {
   }`;
   document.getElementById('r-rsi').textContent = `RSI ${rsi}/10`;
 
-  // Region breakdown bars
   document.getElementById('r-regions').innerHTML =
     Object.entries(d.breakdown_by_body_region).map(([region, info]) => `
       <div>
@@ -737,7 +954,6 @@ function renderCard(d) {
         </div>
       </div>`).join('');
 
-  // Top recommendation
   const recs = d.ergonomic_risk.recommendations || [];
   const r1   = recs[0];
   document.getElementById('r-rec').innerHTML = r1 ? `
@@ -752,7 +968,6 @@ function renderCard(d) {
       </div>
     </div>` : '<p class="text-[13px] text-faint">No critical recommendations.</p>';
 
-  // All recs
   document.getElementById('all-recs').innerHTML = recs.map((r, i) => `
     <div class="bg-paper border hairline rounded-md p-3">
       <div class="flex items-start gap-3">
@@ -765,7 +980,6 @@ function renderCard(d) {
       </div>
     </div>`).join('');
 
-  // Raw JSON
   document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
 }
 
@@ -782,7 +996,7 @@ function init() {
   buildFeed();
   attachVideoHandlers();
 
-  document.getElementById('sample-btn').addEventListener('click', startSample);
+  document.getElementById('sample-btn').addEventListener('click', loadSample);
 
   fileInp().addEventListener('change', e => {
     if (e.target.files[0]) loadVideoFile(e.target.files[0]);

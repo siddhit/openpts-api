@@ -387,13 +387,13 @@
     <div class="section-head">
       <span class="num">§ 01</span>
       <span class="title">Live demo</span>
-      <span class="meta">interactive · simulated playback available</span>
+      <span class="meta">interactive · MediaPipe analysis in-browser</span>
     </div>
     <p class="lede mb-10">
-      Sample task: a worker walks to a heavy box on the floor, bends, grasps it,
-      lifts to chest, walks to a table, and places it down. Six MODAPTS elements,
-      72 MODs, one API call. Drop a video to analyse your own, or run the bundled
-      simulation.
+      Drop any video of a manual task — MediaPipe detects the pose on every frame,
+      velocity-based segmentation finds the motion boundaries, and the MODAPTS
+      classifier maps each segment to a code. Or run the bundled sample to see a
+      delivery-unload sequence analysed end-to-end.
     </p>
 
     <div class="grid lg:grid-cols-5 gap-5">
@@ -414,7 +414,7 @@
             </div>
             <div class="text-center">
               <p class="font-medium text-ink text-[14px]">Drop a video to analyze</p>
-              <p class="text-faint text-[12px] mt-1">MP4 · MOV · WebM &nbsp;·&nbsp; or run the bundled sample</p>
+              <p class="text-faint text-[12px] mt-1">MP4 · MOV · WebM &nbsp;·&nbsp; MediaPipe runs in your browser</p>
             </div>
             <input type="file" id="file-input" accept="video/*" class="hidden">
             <div class="flex items-center gap-2 mt-1">
@@ -428,57 +428,34 @@
               </button>
             </div>
             <p class="text-[11px] text-faint text-center mt-1 font-mono">
-              W5 ×4 &nbsp;·&nbsp; B17 &nbsp;·&nbsp; G3 &nbsp;·&nbsp; M5 &nbsp;·&nbsp; W5 ×5 &nbsp;·&nbsp; P2
+              Sample: delivery unload &nbsp;·&nbsp; B17 × 4 &nbsp;·&nbsp; G3 × 2 &nbsp;·&nbsp; M5 × 2 &nbsp;·&nbsp; P2 × 3
             </p>
           </div>
 
-          <!-- Real video + overlay -->
+          <!-- Video + skeleton overlay + processing overlay -->
           <div id="video-wrap" class="hidden relative aspect-video bg-[#f4f3ef]">
             <video id="vid" preload="metadata" class="w-full h-full object-contain"></video>
             <canvas id="skeleton-canvas"></canvas>
+            <!-- Active motion chip -->
             <div id="code-chip" class="hidden absolute top-3 left-3 video-chip rounded-md px-3 py-1.5 flex items-center gap-2 text-paper">
               <span id="chip-code"  class="font-mono font-bold text-[16px] leading-none"></span>
               <span id="chip-label" class="text-[11.5px] text-zinc-300"></span>
             </div>
+            <!-- Processing overlay — shown while MediaPipe runs -->
+            <div id="processing-overlay"
+                 class="hidden absolute inset-0 flex flex-col items-center justify-center gap-4
+                        bg-paper/90 backdrop-blur-sm">
+              <div class="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
+              <p id="processing-msg" class="text-[13px] font-medium text-ink text-center max-w-[240px] leading-snug"></p>
+              <div class="w-52 h-1.5 bg-rule rounded-full overflow-hidden">
+                <div id="processing-bar"
+                     class="h-full bg-accent rounded-full transition-all duration-300"
+                     style="width:0%"></div>
+              </div>
+              <p class="text-[11px] text-faint font-mono">powered by MediaPipe Tasks Vision</p>
+            </div>
             <div class="absolute bottom-0 left-0 right-0 h-1 bg-zinc-300/50">
               <div id="progress-bar" class="h-full bg-accent" style="width:0%"></div>
-            </div>
-          </div>
-
-          <!-- Sample mode stage -->
-          <div id="sample-stage" class="hidden relative aspect-video overflow-hidden"
-               style="background:linear-gradient(180deg,#f4f3ef 0%,#ebe9e3 100%);">
-            <div class="absolute inset-x-0 bottom-0 h-1/3"
-                 style="background:linear-gradient(180deg,#ebe9e3 0%,#dcd9d1 100%);"></div>
-            <!-- Box -->
-            <div id="sample-box" class="absolute left-[12%] bottom-[22%] w-12 h-12 transition-all duration-500"
-                 style="background:linear-gradient(135deg,#b45309 0%,#92400e 100%); box-shadow:0 4px 0 rgba(0,0,0,0.08);"></div>
-            <!-- Table -->
-            <div class="absolute right-[10%] bottom-[22%] w-32 h-2.5 bg-[#a16207]"></div>
-            <div class="absolute right-[12%] bottom-[8%] w-1.5 h-[14%] bg-[#a16207]"></div>
-            <div class="absolute right-[36%] bottom-[8%] w-1.5 h-[14%] bg-[#a16207]"></div>
-            <!-- Stick figure -->
-            <svg id="sample-figure" class="absolute" viewBox="0 0 60 120"
-                 style="left:5%; bottom:22%; width:50px; height:110px;" overflow="visible">
-              <g id="sf-g" stroke="#18181b" stroke-width="3" stroke-linecap="round" fill="none">
-                <circle id="sf-head"  cx="30" cy="14"  r="9" fill="#fbfaf7"/>
-                <line   id="sf-torso" x1="30" y1="23" x2="30" y2="65"/>
-                <line   id="sf-arml"  x1="30" y1="35" x2="14" y2="55"/>
-                <line   id="sf-armr"  x1="30" y1="35" x2="46" y2="55"/>
-                <line   id="sf-legl"  x1="30" y1="65" x2="18" y2="110"/>
-                <line   id="sf-legr"  x1="30" y1="65" x2="42" y2="110"/>
-              </g>
-            </svg>
-            <!-- Active code chip -->
-            <div id="sample-chip" class="hidden absolute top-3 left-3 video-chip rounded-md px-3 py-1.5 flex items-center gap-2 text-paper">
-              <span id="sample-chip-code"  class="font-mono font-bold text-[16px] leading-none"></span>
-              <span id="sample-chip-label" class="text-[11.5px] text-zinc-300"></span>
-            </div>
-            <div class="absolute top-3 right-3 text-[10.5px] font-mono text-faint bg-panel/80 backdrop-blur px-2 py-1 rounded">
-              SAMPLE · simulated playback
-            </div>
-            <div class="absolute bottom-0 left-0 right-0 h-1 bg-zinc-300/50">
-              <div id="sample-progress" class="h-full bg-accent" style="width:0%"></div>
             </div>
           </div>
 
@@ -489,7 +466,7 @@
           <div class="bg-panel border hairline rounded-lg p-4">
             <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider">MODs</p>
             <p id="s-mods" class="text-[32px] font-bold text-ink leading-none tab-nums mt-1.5">0</p>
-            <p class="text-[11px] text-faint mt-1.5 font-mono">of 72</p>
+            <p class="text-[11px] text-faint mt-1.5 font-mono">of <span id="total-mods-label">—</span></p>
           </div>
           <div class="bg-panel border hairline rounded-lg p-4">
             <p class="text-[10.5px] text-faint font-mono uppercase tracking-wider">Base time</p>
@@ -524,7 +501,7 @@
         <div class="bg-panel border hairline rounded-lg h-full flex flex-col">
           <div class="px-4 py-3 border-b hairline flex items-center justify-between flex-shrink-0">
             <span class="text-[13px] font-semibold text-ink">MODAPTS sequence</span>
-            <span class="text-[11px] text-faint font-mono">Heavy box · floor → table</span>
+            <span id="seq-header-task" class="text-[11px] text-faint font-mono truncate max-w-[160px]">—</span>
           </div>
           <div id="seq-feed" class="p-2.5 space-y-1.5 flex-1 overflow-y-auto scrollbar-thin" style="max-height:480px;"></div>
           <div class="px-4 py-3 border-t hairline flex flex-wrap gap-x-3 gap-y-1.5 items-center">

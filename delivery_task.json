@@ -1,0 +1,14 @@
+[
+  {"code": "B17", "qty": 1, "label": "Bend, lower first box",   "cat": "bend", "region": "body",     "mv": 17, "mods": 17},
+  {"code": "P2",  "qty": 1, "label": "Place box on ground",     "cat": "put",  "region": "hand",     "mv": 2,  "mods": 2},
+  {"code": "B17", "qty": 1, "label": "Rise and reach into van", "cat": "bend", "region": "body",     "mv": 17, "mods": 17},
+  {"code": "G3",  "qty": 1, "label": "Grasp box in van",        "cat": "get",  "region": "hand",     "mv": 3,  "mods": 3},
+  {"code": "M5",  "qty": 1, "label": "Pull box to van edge",    "cat": "move", "region": "full_arm", "mv": 5,  "mods": 5},
+  {"code": "B17", "qty": 1, "label": "Bend, lower to stack",    "cat": "bend", "region": "body",     "mv": 17, "mods": 17},
+  {"code": "P2",  "qty": 1, "label": "Place on stack",          "cat": "put",  "region": "hand",     "mv": 2,  "mods": 2},
+  {"code": "B17", "qty": 1, "label": "Rise and reach into van", "cat": "bend", "region": "body",     "mv": 17, "mods": 17},
+  {"code": "G3",  "qty": 1, "label": "Grasp last box",          "cat": "get",  "region": "hand",     "mv": 3,  "mods": 3},
+  {"code": "M5",  "qty": 1, "label": "Lift box out of van",     "cat": "move", "region": "full_arm", "mv": 5,  "mods": 5},
+  {"code": "B17", "qty": 1, "label": "Bend to final placement", "cat": "bend", "region": "body",     "mv": 17, "mods": 17},
+  {"code": "P2",  "qty": 1, "label": "Place on stack",          "cat": "put",  "region": "hand",     "mv": 2,  "mods": 2}
+]
