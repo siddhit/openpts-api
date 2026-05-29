@@ -521,55 +521,74 @@ function classifySegment(frames) {
   return { code: 'G0', cat: 'get', region: 'fingers', mv: 0 };
 }
 
-// Velocity-based segmentation + classification — works for any video
+// Sliding-window mode segmentation + classification — works for any video.
+// Labels each frame with a coarse mode (bend/walk/arm) using a local window,
+// then groups consecutive same-mode frames so short walks are not swallowed
+// by surrounding bend segments when the person never comes to a full stop.
 function detectAndClassify(frames, durationMs) {
   if (frames.length < 3) return [];
 
-  // Per-frame max velocity across wrists + ankles
-  const vels = [0];
-  for (let i = 1; i < frames.length; i++) {
-    const a = frames[i - 1].landmarks, b = frames[i].landmarks;
-    let v = 0;
-    for (const lm of ['left_wrist', 'right_wrist', 'left_ankle', 'right_ankle']) {
-      if (a[lm] && b[lm]) {
-        const dx = b[lm].x - a[lm].x, dy = b[lm].y - a[lm].y;
-        v = Math.max(v, Math.sqrt(dx * dx + dy * dy));
-      }
-    }
-    vels.push(v);
-  }
+  // Window = ~0.8 s centred on each frame
+  const HALF = Math.max(3, Math.floor(frames.length * 0.04));
 
-  // 5-point median smooth
-  const smooth = vels.map((_, i) => {
-    const w = [...vels.slice(Math.max(0, i - 2), i + 3)].sort((a, b) => a - b);
-    return w[Math.floor(w.length / 2)];
+  // Per-frame coarse mode
+  const modes = frames.map((_, i) => {
+    const w = frames.slice(Math.max(0, i - HALF), i + HALF + 1);
+    if (w.length < 2) return 'arm';
+    const f = extractFeatures(w);
+    if (!f) return 'arm';
+
+    const gapRatio   = f.gapRange / Math.max(f.hipDisp, 0.01);
+    const b17Classic = f.shoulderDrop > RULES.bend_shoulder_drop && f.hipDisp < RULES.sit_hip_drop;
+    const b17Dominant= f.gapRange > RULES.bend_gap_range && gapRatio >= 1.3;
+
+    if (b17Classic || b17Dominant)              return 'bend';
+    if (f.ankleOscillation > RULES.walk_ankle_osc) return 'walk';
+    return 'arm';
   });
 
-  const meanV  = avg(smooth);
-  const thr    = meanV * 0.35;
-  const minGap = Math.max(3, Math.floor(frames.length * 0.07));
+  // 5-point majority-vote smooth — removes single-frame noise at transitions
+  const smoothed = modes.map((_, i) => {
+    const w = modes.slice(Math.max(0, i - 2), i + 3);
+    const cnt = {};
+    w.forEach(m => cnt[m] = (cnt[m] || 0) + 1);
+    return Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0];
+  });
 
-  // Find velocity valleys (motion transitions)
-  const cuts = [0];
-  for (let i = 2; i < smooth.length - 2; i++) {
-    if (smooth[i] < thr &&
-        smooth[i] <= smooth[i - 1] && smooth[i] <= smooth[i + 1] &&
-        i - cuts[cuts.length - 1] >= minGap) {
-      cuts.push(i);
+  // Minimum segment length: ~4% of total frames (avoids 1-frame jitter)
+  const MIN_FRAMES = Math.max(3, Math.floor(frames.length * 0.04));
+
+  // Group consecutive same-mode frames
+  const segments = [];
+  let i = 0;
+  while (i < frames.length) {
+    const mode = smoothed[i];
+    let j = i + 1;
+    while (j < frames.length && smoothed[j] === mode) j++;
+
+    const segFrames = frames.slice(i, j);
+    if (segFrames.length >= MIN_FRAMES) {
+      segments.push({ mode, frames: segFrames });
+    } else if (segments.length > 0) {
+      // Absorb tiny noise segment into the previous one
+      segments[segments.length - 1].frames.push(...segFrames);
     }
+    i = j;
   }
-  cuts.push(frames.length - 1);
 
-  // Classify each segment
+  // Classify each segment and build SEQ
   const seq = [];
-  for (let i = 0; i < cuts.length - 1; i++) {
-    const segFrames = frames.slice(cuts[i], cuts[i + 1] + 1);
-    if (segFrames.length < 2) continue;
-    const cls     = classifySegment(segFrames);
-    const startMs = segFrames[0].timestamp_ms;
-    const endMs   = segFrames[segFrames.length - 1].timestamp_ms;
+  for (const { mode, frames: sf } of segments) {
+    const startMs = sf[0].timestamp_ms;
+    const endMs   = sf[sf.length - 1].timestamp_ms;
 
-    // Merge consecutive W5 steps
+    // For bend/walk use the mode directly; for arm use the fine classifier
+    let cls;
+    if      (mode === 'bend') cls = { code: 'B17', cat: 'bend', region: 'body',    mv: 17 };
+    else if (mode === 'walk') cls = { code: 'W5',  cat: 'walk', region: 'leg',     mv: 5  };
+    else                      cls = classifySegment(sf);
+
+    // Merge consecutive W5 steps into one element with qty > 1
     const last = seq[seq.length - 1];
     if (last && last.code === 'W5' && cls.code === 'W5') {
       last.qty++;

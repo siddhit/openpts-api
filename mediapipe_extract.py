@@ -41,10 +41,12 @@ except ImportError:
     sys.exit("❌  mediapipe not installed.\n    Run: pip install mediapipe")
 
 try:
-    from classifier import classify_pose_sequence
+    from classifier import classify_pose_sequence, _extract_features, THRESHOLDS
     CLASSIFIER_AVAILABLE = True
 except ImportError:
     CLASSIFIER_AVAILABLE = False
+    _extract_features = None
+    THRESHOLDS = {}
     print("⚠️  classifier.py not found — predicted codes will use expected values")
 
 
@@ -202,57 +204,88 @@ def segment(frames: list, duration_ms: int, task_override: list = None) -> list:
     return segs
 
 
-# ── Auto-segmentation (velocity-based onset detection) ─────────────────────────
+# ── Sliding-window mode segmentation ─────────────────────────────────────────
 def auto_segment(frames: list, fps: float, min_seg_sec: float = 0.7) -> list:
     """
-    Detect motion boundaries from wrist/ankle velocity valleys.
-    Returns a list of frame-lists, one per detected segment.
-    Works for any video without knowing the task sequence in advance.
+    Segment by labelling each frame with a coarse motion mode (bend / walk / arm)
+    using a sliding classification window, then grouping consecutive same-mode frames.
+
+    This is more robust than velocity valleys for continuous manual labour tasks where
+    the person rarely comes to a complete stop between motions.  Walk phases are
+    correctly separated from bend phases because they produce distinct signatures:
+      • Walk:  ankle IQR rises above threshold, shoulder/hip gap stays stable
+      • Bend:  shoulder/hip gap varies significantly, dominates over hip displacement
     """
+    if not CLASSIFIER_AVAILABLE or _extract_features is None:
+        # Fallback: return the whole video as one segment
+        return [frames]
+
     if len(frames) < 10:
         return [frames]
 
-    tracking_lms = ['left_wrist', 'right_wrist', 'left_ankle', 'right_ankle']
+    # Compute actual pose-frame rate from timestamps (may differ from video fps
+    # when --skip > 1 is used — e.g. skip=2 at 25fps → ~12.5 pose fps)
+    if len(frames) >= 2:
+        span_sec = (frames[-1]['timestamp_ms'] - frames[0]['timestamp_ms']) / 1000.0
+        pose_fps = len(frames) / max(span_sec, 0.1)
+    else:
+        pose_fps = fps
 
-    # Compute per-frame max velocity across tracked landmarks
-    vels = [0.0]
-    for i in range(1, len(frames)):
-        a, b = frames[i - 1]['landmarks'], frames[i]['landmarks']
-        v = 0.0
-        for lm in tracking_lms:
-            if lm in a and lm in b:
-                dx = b[lm]['x'] - a[lm]['x']
-                dy = b[lm]['y'] - a[lm]['y']
-                v = max(v, (dx * dx + dy * dy) ** 0.5)
-        vels.append(v)
+    # Window = ~1.0 s of context centred on each frame (using pose fps).
+    # Large enough to give stable features but small enough to catch 2-step walks.
+    win      = max(8, int(pose_fps * 1.0))
+    half_win = win // 2
+    bend_thr = THRESHOLDS.get('bend_gap_range',   0.10)
+    drop_thr = THRESHOLDS.get('bend_shoulder_drop', 0.12)
+    hip_thr  = THRESHOLDS.get('sit_hip_drop',      0.15)
+    walk_thr = THRESHOLDS.get('walk_ankle_oscillation', 0.06)
 
-    # 5-point median smooth
-    def smooth(arr, w=5):
+    modes = []
+    for i in range(len(frames)):
+        w    = frames[max(0, i - half_win): i + half_win + 1]
+        feat = _extract_features(w, 'bilateral')
+        if not feat:
+            modes.append('arm')
+            continue
+
+        gap_ratio   = feat['shoulder_hip_gap_range'] / max(feat['hip_y_displacement'], 0.01)
+        b17_classic = (feat['shoulder_y_drop'] >= drop_thr
+                       and feat['hip_y_displacement'] < hip_thr)
+        b17_dominant= (feat['shoulder_hip_gap_range'] >= bend_thr and gap_ratio >= 1.3)
+
+        if b17_classic or b17_dominant:
+            modes.append('bend')
+        elif feat['ankle_oscillation'] >= walk_thr:
+            modes.append('walk')
+        else:
+            modes.append('arm')
+
+    # 9-point majority-vote smoothing — removes brief mode flips at transitions
+    def mode_smooth(arr, w=9):
         out = []
         for i in range(len(arr)):
-            chunk = sorted(arr[max(0, i - w // 2): i + w // 2 + 1])
-            out.append(chunk[len(chunk) // 2])
+            chunk = arr[max(0, i - w // 2): i + w // 2 + 1]
+            out.append(max(set(chunk), key=chunk.count))
         return out
 
-    s = smooth(vels)
-    mean_v = sum(s) / len(s) if s else 0
-    threshold = mean_v * 0.35
-    min_gap   = max(6, int(fps * min_seg_sec))
+    smoothed   = mode_smooth(modes)
+    # Minimum segment = 1 full second so that sub-second noise is absorbed
+    min_frames = max(8, int(pose_fps * max(min_seg_sec, 1.0)))
 
-    # Valley = local minimum below threshold
-    cuts = [0]
-    for i in range(2, len(s) - 2):
-        if (s[i] < threshold and
-                s[i] <= s[i - 1] and s[i] <= s[i + 1] and
-                i - cuts[-1] >= min_gap):
-            cuts.append(i)
-    cuts.append(len(frames) - 1)
-
+    # Group consecutive same-mode frames into segments
     segs = []
-    for i in range(len(cuts) - 1):
-        sf = frames[cuts[i]: cuts[i + 1] + 1]
-        if len(sf) >= 4:
-            segs.append(sf)
+    i = 0
+    while i < len(frames):
+        m = smoothed[i]
+        j = i + 1
+        while j < len(frames) and smoothed[j] == m:
+            j += 1
+        seg = frames[i:j]
+        if len(seg) >= min_frames // 2:
+            segs.append(seg)
+        elif segs:
+            segs[-1] = segs[-1] + seg   # absorb tiny segments into the previous one
+        i = j
 
     return segs if segs else [frames]
 
