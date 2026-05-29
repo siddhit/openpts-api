@@ -50,21 +50,21 @@ except ImportError:
 
 # ── MODAPTS code info lookup ───────────────────────────────────────────────────
 CODE_INFO = {
-    'W5':  dict(cat='walk',  region='leg',      mv=5),
-    'B17': dict(cat='bend',  region='body',     mv=17),
-    'G3':  dict(cat='get',   region='hand',     mv=3),
-    'G1':  dict(cat='get',   region='fingers',  mv=1),
-    'G0':  dict(cat='get',   region='fingers',  mv=0),
-    'M5':  dict(cat='move',  region='full_arm', mv=5),
-    'M4':  dict(cat='move',  region='arm',      mv=4),
-    'M3':  dict(cat='move',  region='arm',      mv=3),
-    'M2':  dict(cat='move',  region='hand',     mv=2),
-    'M1':  dict(cat='move',  region='fingers',  mv=1),
-    'P2':  dict(cat='put',   region='hand',     mv=2),
-    'P0':  dict(cat='put',   region='fingers',  mv=0),
-    'S30': dict(cat='sit',   region='body',     mv=30),
-    'ST30':dict(cat='stand', region='body',     mv=30),
-    'E2':  dict(cat='eye_action', region='eyes', mv=2),
+    'W5':  dict(cat='walk',  region='leg',      mv=5,  label='Walk (1 pace)'),
+    'B17': dict(cat='bend',  region='body',     mv=17, label='Bend and arise'),
+    'G3':  dict(cat='get',   region='hand',     mv=3,  label='Complex grasp'),
+    'G1':  dict(cat='get',   region='fingers',  mv=1,  label='Simple grasp'),
+    'G0':  dict(cat='get',   region='fingers',  mv=0,  label='Contact grasp'),
+    'M5':  dict(cat='move',  region='full_arm', mv=5,  label='Move — full arm'),
+    'M4':  dict(cat='move',  region='arm',      mv=4,  label='Move — upper arm'),
+    'M3':  dict(cat='move',  region='arm',      mv=3,  label='Move — forearm'),
+    'M2':  dict(cat='move',  region='hand',     mv=2,  label='Move — hand'),
+    'M1':  dict(cat='move',  region='fingers',  mv=1,  label='Move — finger'),
+    'P2':  dict(cat='put',   region='hand',     mv=2,  label='Place — approx.'),
+    'P0':  dict(cat='put',   region='fingers',  mv=0,  label='Place — loose'),
+    'S30': dict(cat='sit',   region='body',     mv=30, label='Sit down'),
+    'ST30':dict(cat='stand', region='body',     mv=30, label='Stand up'),
+    'E2':  dict(cat='eye_action', region='eyes', mv=2, label='Eye focus'),
 }
 
 # ── Task definition ────────────────────────────────────────────────────────────
@@ -271,12 +271,12 @@ def classify_auto(seg_frame_lists: list, duration_ms: int) -> list:
 
         start_ms = seg_frames[0]['timestamp_ms']
         end_ms   = seg_frames[-1]['timestamp_ms']
-        info     = CODE_INFO.get(code, dict(cat='move', region='arm', mv=3))
+        info     = CODE_INFO.get(code, dict(cat='move', region='arm', mv=3, label=code))
 
         print(f"    {start_ms/1000:.1f}s–{end_ms/1000:.1f}s  →  {code}  (conf={conf:.2f})")
 
         results.append(dict(
-            code=code, quantity=1, label=code,
+            code=code, quantity=1, label=info.get('label', code),
             category=info['cat'], body_region=info['region'],
             mod_value=info['mv'], subtotal_mods=info['mv'],
             start_ms=start_ms, end_ms=end_ms,

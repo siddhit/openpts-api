@@ -52,11 +52,12 @@ _MOTION_INFO: Dict[str, Dict[str, Any]] = {
 # person filmed at ~2m distance, full-body visible, standard-height camera.
 # They will need per-deployment calibration once labeled data exists.
 THRESHOLDS = {
-    "bend_shoulder_drop":    0.12,   # shoulder/hip gap closes >12% → bending trunk
-                                     # (was 0.18 — real-world bends in normalized coords
-                                     #  often land 0.12–0.17 depending on camera height)
+    "bend_shoulder_drop":    0.12,   # shoulder/hip gap closes >12% from segment start → bending
+    "bend_gap_range":        0.10,   # shoulder/hip gap varies >10% anywhere in segment → B17
+                                     # catches segments that START with worker already bent
     "sit_hip_drop":          0.15,   # hips descend >15% of frame → sit/stand motion
-    "walk_ankle_oscillation":0.04,   # ankle Y oscillation >4% → walking
+    "walk_ankle_oscillation":0.06,   # ankle Y IQR >6% → walking
+                                     # IQR is used (not max-min) to resist outlier detections
     "wrist_M5":              0.22,   # wrist travels >22% of frame → M5 (very long move)
                                      # (was 0.28 — floor-to-chest lift in full-body frame ≈ 0.22–0.35)
     "wrist_M4":              0.14,   # >14% → M4
@@ -75,20 +76,27 @@ def _lm(frame: Dict, name: str) -> Optional[Dict]:
     return frame["landmarks"].get(name)
 
 
-def _mean_y(frames: List[Dict], names: List[str]) -> List[float]:
-    """Per-frame mean Y across the given landmark names."""
+def _mean_y(frames: List[Dict], names: List[str], min_vis: float = 0.5) -> List[float]:
+    """
+    Per-frame mean Y across the given landmark names.
+    Landmarks with visibility < min_vis are excluded — prevents occluded/out-of-frame
+    landmarks (common during bending/squatting when feet or hands leave the frame) from
+    inflating feature values with garbage coordinates.
+    """
     result = []
     for f in frames:
         vals = [_lm(f, n) for n in names]
-        ys = [v["y"] for v in vals if v is not None]
+        ys = [v["y"] for v in vals
+              if v is not None and v.get("visibility", 1.0) >= min_vis]
         if ys:
             result.append(sum(ys) / len(ys))
     return result
 
 
-def _centroid(frame: Dict, names: List[str]) -> Optional[tuple]:
+def _centroid(frame: Dict, names: List[str], min_vis: float = 0.5) -> Optional[tuple]:
     pts = [_lm(frame, n) for n in names]
-    pts = [(v["x"], v["y"]) for v in pts if v is not None]
+    pts = [(v["x"], v["y"]) for v in pts
+           if v is not None and v.get("visibility", 1.0) >= min_vis]
     if not pts:
         return None
     return (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
@@ -126,21 +134,37 @@ def _extract_features(frames: List[Dict], active_side: str) -> Dict[str, Any]:
     # ── Bending signature ──────────────────────────────────────────────────
     # In screen-Y (down = positive), hips normally have higher Y than shoulders.
     # When a person bends, shoulders descend toward hip level — gap closes.
-    shoulder_y_drop = 0.0
+    #
+    # We measure gap_range (max–min gap throughout the segment) rather than just
+    # start_gap–min_gap. This fires correctly even when the segment starts with
+    # the worker already mid-bend (start_gap already small → shoulder_y_drop ≈ 0),
+    # which is the common failure mode for consecutive bend elements.
+    shoulder_y_drop  = 0.0
+    gap_range        = 0.0
     returns_to_start = False
     if shoulder_ys and hip_ys:
         n = min(len(shoulder_ys), len(hip_ys))
         gaps = [hip_ys[i] - shoulder_ys[i] for i in range(n)]
-        start_gap = gaps[0]
-        min_gap   = min(gaps)
-        shoulder_y_drop = max(0.0, start_gap - min_gap)
+        start_gap        = gaps[0]
+        min_gap          = min(gaps)
+        max_gap          = max(gaps)
+        shoulder_y_drop  = max(0.0, start_gap - min_gap)   # classic start→min drop
+        gap_range        = max_gap - min_gap               # full range regardless of start
         returns_to_start = abs(shoulder_ys[-1] - shoulder_ys[0]) < 0.08
 
     # ── Sitting / standing signature ───────────────────────────────────────
     hip_y_displacement = (max(hip_ys) - min(hip_ys)) if hip_ys else 0.0
 
     # ── Walking signature ─────────────────────────────────────────────────
-    ankle_oscillation = (max(ankle_ys) - min(ankle_ys)) if len(ankle_ys) > 4 else 0.0
+    # Use IQR (Q75 − Q25) instead of max-min so that single bad detections
+    # (one frame where MediaPipe places an occluded ankle at the wrong position)
+    # don't inflate the oscillation value and trigger a false W5 prediction.
+    if len(ankle_ys) > 4:
+        s = sorted(ankle_ys)
+        q1, q3 = s[len(s) // 4], s[3 * len(s) // 4]
+        ankle_oscillation = q3 - q1
+    else:
+        ankle_oscillation = 0.0
 
     # ── Arm / wrist motion ─────────────────────────────────────────────────
     wrist_displacement = _max_displacement(frames, wrist_names)
@@ -150,6 +174,7 @@ def _extract_features(frames: List[Dict], active_side: str) -> Dict[str, Any]:
 
     return {
         "shoulder_y_drop":        round(shoulder_y_drop, 3),
+        "shoulder_hip_gap_range": round(gap_range, 3),
         "hip_y_displacement":     round(hip_y_displacement, 3),
         "ankle_oscillation":      round(ankle_oscillation, 3),
         "wrist_displacement":     round(wrist_displacement, 3),
@@ -210,25 +235,40 @@ def classify_pose_sequence(
     f = feat  # shorthand
 
     # ── Rule 1: BEND AND ARISE (B17) ───────────────────────────────────────
-    if (f["shoulder_y_drop"] >= THRESHOLDS["bend_shoulder_drop"]
-            and f["returns_to_start"]
-            and f["hip_y_displacement"] < THRESHOLDS["sit_hip_drop"]):
-        trunk_degrees = int(f["shoulder_y_drop"] * 230)   # rough calibration
+    # Signal: trunk folds significantly, changing the shoulder/hip vertical gap.
+    #
+    # b17_classic: gap closes ≥12% from segment start (worker starts upright)
+    # b17_dominant: gap_range ≥12% AND gap_range/hip_displacement > 1.3
+    #   → trunk flexion clearly larger than hip vertical travel
+    #   → distinguishes B17 (trunk bends, hips roughly stationary)
+    #     from S30 (whole body descends, gap stays roughly constant, ratio ≈0.2)
+    #   → no ankle guard needed here — if gap_range ≥12% with ratio >1.3 it
+    #     cannot be walking (walking has gap_range <8%)
+    gap_ratio  = f["shoulder_hip_gap_range"] / max(f["hip_y_displacement"], 0.01)
+    b17_classic  = (f["shoulder_y_drop"] >= THRESHOLDS["bend_shoulder_drop"]
+                    and f["hip_y_displacement"] < THRESHOLDS["sit_hip_drop"])
+    b17_dominant = (f["shoulder_hip_gap_range"] >= THRESHOLDS["bend_gap_range"]
+                    and gap_ratio >= 1.3)
+    if b17_classic or b17_dominant:
+        trigger = "gap_drop" if b17_classic else "gap_dominant"
+        sig     = f["shoulder_y_drop"] if b17_classic else f["shoulder_hip_gap_range"]
+        trunk_degrees = int(sig * 230)
         return _result(
             code="B17",
-            confidence=min(0.97, 0.74 + f["shoulder_y_drop"] * 1.1),
+            confidence=min(0.97, 0.74 + sig * 1.1),
             features={
                 **feat,
                 "trunk_flexion_peak_degrees": trunk_degrees,
+                "b17_trigger":    trigger,
                 "motion_type":    "bilateral_symmetric",
                 "motion_duration_ms": duration_ms,
-                "return_to_upright":  True,
             },
             reasoning=(
-                f"Shoulders descended {f['shoulder_y_drop']*100:.0f}% of frame height "
-                f"relative to hips and returned to start position (Δ < 8%). "
-                f"Estimated trunk flexion ~{trunk_degrees}°. Hips stationary "
-                f"(Δ={f['hip_y_displacement']*100:.1f}%). Pattern is B17: trunk bend-and-arise."
+                f"Trunk bend detected via {trigger}: "
+                f"shoulder/hip gap {'closed by' if b17_classic else 'ranged'} "
+                f"{sig*100:.0f}% of frame height. "
+                f"Hips stationary (Δ={f['hip_y_displacement']*100:.1f}%), "
+                f"no walking detected. Pattern is B17: trunk bend-and-arise."
             ),
             alternatives=[
                 {"code": "S30",  "confidence": 0.05,

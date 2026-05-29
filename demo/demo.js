@@ -411,18 +411,25 @@ function arrRange(arr) {
 }
 
 const RULES = {
-  bend_shoulder_drop: 0.12,
+  bend_shoulder_drop: 0.12,   // gap closes ≥12% from segment start
+  bend_gap_range:     0.10,   // gap varies ≥10% anywhere in segment (catches mid-bend starts)
   sit_hip_drop:       0.15,
-  walk_ankle_osc:     0.015,
+  walk_ankle_osc:     0.06,   // IQR threshold — synced with classifier.py
   wrist_M5: 0.22, wrist_M4: 0.14, wrist_M3: 0.08, wrist_M2: 0.04,
   wrist_G3: 0.02, wrist_G1: 0.005,
   wrist_y_range_M5: 0.20,
 };
 
+const MIN_VIS = 0.5;  // ignore landmarks with visibility below this — filters occlusion noise
+
 function extractFeatures(frames) {
   if (frames.length < 2) return null;
+  // Only include landmark values where MediaPipe reports sufficient visibility
   const col = (lm, axis) =>
-    frames.map(f => f.landmarks[lm]?.[axis]).filter(v => v != null);
+    frames
+      .filter(f => (f.landmarks[lm]?.visibility ?? 1.0) >= MIN_VIS)
+      .map(f => f.landmarks[lm]?.[axis])
+      .filter(v => v != null);
 
   const lsy = col('left_shoulder', 'y'),  rsy = col('right_shoulder', 'y');
   const lhy = col('left_hip', 'y'),       rhy = col('right_hip', 'y');
@@ -433,16 +440,36 @@ function extractFeatures(frames) {
   const tail4 = a => a.slice(-Math.min(4, a.length));
   const head4 = a => a.slice(0,  Math.min(4, a.length));
 
-  const shoulderDrop =
-    (avg(tail4(lsy)) + avg(tail4(rsy))) / 2 -
-    (avg(head4(lsy)) + avg(head4(rsy))) / 2;
+  // Per-frame mean shoulder Y and hip Y → gap array
+  const n = Math.min(lsy.length, lhy.length);
+  const gaps = [];
+  for (let i = 0; i < n; i++) {
+    const shoulderY = (lsy[i] != null && rsy[i] != null) ? (lsy[i] + rsy[i]) / 2
+                    : (lsy[i] ?? rsy[i] ?? null);
+    const hipY      = (lhy[i] != null && rhy[i] != null) ? (lhy[i] + rhy[i]) / 2
+                    : (lhy[i] ?? rhy[i] ?? null);
+    if (shoulderY != null && hipY != null) gaps.push(hipY - shoulderY);
+  }
+
+  let shoulderDrop = 0, gapRange = 0;
+  if (gaps.length >= 2) {
+    const startGap = gaps[0];
+    const minGap   = Math.min(...gaps);
+    const maxGap   = Math.max(...gaps);
+    shoulderDrop   = Math.max(0, startGap - minGap);  // classic: gap closes from start
+    gapRange       = maxGap - minGap;                  // full range regardless of start
+  }
 
   const hipDisp = Math.abs(
     (avg(tail4(lhy)) + avg(tail4(rhy))) / 2 -
     (avg(head4(lhy)) + avg(head4(rhy))) / 2
   );
 
-  const ankleOscillation = stdDev([...lay, ...ray]);
+  // Use IQR (Q75−Q25) for ankle oscillation — resistant to single bad detections
+  const allAnkleY = [...lay, ...ray].sort((a, b) => a - b);
+  const ankleOscillation = allAnkleY.length > 4
+    ? allAnkleY[Math.floor(allAnkleY.length * 0.75)] - allAnkleY[Math.floor(allAnkleY.length * 0.25)]
+    : 0;
 
   const lStart = { x: avg(head4(lwx)), y: avg(head4(lwy)) };
   const lEnd   = { x: avg(tail4(lwx)), y: avg(tail4(lwy)) };
@@ -453,15 +480,24 @@ function extractFeatures(frames) {
   const wristYRange    = Math.max(arrRange(lwy), arrRange(rwy));
   const effectiveWrist = Math.max(wristDisp, wristYRange * 0.85);
 
-  return { shoulderDrop, hipDisp, ankleOscillation, wristDisp, wristYRange, effectiveWrist };
+  return { shoulderDrop, gapRange, hipDisp, ankleOscillation, wristDisp, wristYRange, effectiveWrist };
 }
 
 function classifySegment(frames) {
   const f = extractFeatures(frames);
   if (!f) return { code: 'G0', cat: 'get', region: 'fingers', mv: 0 };
 
-  if (f.shoulderDrop > RULES.bend_shoulder_drop)
+  // B17: trunk flexion clearly present
+  // b17_classic: gap closes from upright start AND hips stay put
+  // b17_dominant: gap_range large AND trunk motion dominates hip motion (ratio > 1.3)
+  //   — distinguishes B17 from S30 (S30 has low gap_range, whole body descends together)
+  //   — no ankle guard needed: walking can't produce gap_range >= 10% with ratio > 1.3
+  const gapRatio   = f.gapRange / Math.max(f.hipDisp, 0.01);
+  const b17Classic  = f.shoulderDrop > RULES.bend_shoulder_drop && f.hipDisp < RULES.sit_hip_drop;
+  const b17Dominant = f.gapRange > RULES.bend_gap_range && gapRatio >= 1.3;
+  if (b17Classic || b17Dominant)
     return { code: 'B17', cat: 'bend', region: 'body', mv: 17 };
+
   if (f.hipDisp > RULES.sit_hip_drop && f.ankleOscillation < RULES.walk_ankle_osc)
     return f.shoulderDrop > 0
       ? { code: 'S30',  cat: 'sit',   region: 'body', mv: 30 }
